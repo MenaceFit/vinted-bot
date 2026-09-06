@@ -62,14 +62,14 @@ async def _queue_worker() -> None:
             wait = MIN_INTERVAL - (time.monotonic() - _last_send_ts)
             if wait > 0:
                 await asyncio.sleep(wait)
-            ok = await send_ad(bot_token, chat_id, ad, send_image)
+            ok, error = await send_ad(bot_token, chat_id, ad, send_image)
             _last_send_ts = time.monotonic()
             if on_result:
-                on_result(ok)
+                on_result(ok, error)
         except Exception as e:
             logger.error(f"[telegram] Worker error: {e}")
             if on_result:
-                on_result(False)
+                on_result(False, str(e))
         finally:
             _queue.task_done()
 
@@ -79,37 +79,38 @@ async def send_ad_nowait(
     chat_id: str,
     ad: dict,
     send_image: bool = True,
-    on_result: Optional[Callable[[bool], None]] = None,
+    on_result: Optional[Callable[[bool, str], None]] = None,
 ) -> None:
-    """Enqueue une notification Telegram. Retourne immédiatement, ne bloque jamais le scan."""
+    """Enqueue une notification Telegram. Retourne immédiatement, ne bloque jamais le scan.
+    `on_result(ok, error)` : `error` est la description Telegram de l'échec, vide si `ok`."""
     if not bot_token or not chat_id:
         if on_result:
-            on_result(False)
+            on_result(False, "Bot Token ou Chat ID manquant")
         return
     await _queue.put((bot_token, chat_id, ad, send_image, on_result))
 
 
 # ── Envoi effectif ────────────────────────────────────────────────────────────
 
-async def send_ad(bot_token: str, chat_id: str, ad: dict, send_image: bool = True) -> bool:
-    """Envoie une annonce (avec photo si possible). Retourne True/False."""
+async def send_ad(bot_token: str, chat_id: str, ad: dict, send_image: bool = True) -> tuple[bool, str]:
+    """Envoie une annonce (avec photo si possible). Retourne (ok, raison_si_échec)."""
     caption = telegram_caption(ad)
     image_url = ad.get("image", "") if send_image else ""
 
     if image_url and image_url.startswith("http"):
-        ok, _ = await _call(
+        ok, data = await _call(
             bot_token, "sendPhoto",
             {"chat_id": chat_id, "photo": image_url, "caption": caption, "parse_mode": "HTML"},
         )
         if ok:
-            return True
+            return True, ""
         logger.warning("[telegram] Envoi photo échoué → repli texte seul")
 
-    ok, _ = await _call(
+    ok, data = await _call(
         bot_token, "sendMessage",
         {"chat_id": chat_id, "text": caption, "parse_mode": "HTML"},
     )
-    return ok
+    return ok, ("" if ok else data.get("description", "erreur inconnue"))
 
 
 async def test_connection(bot_token: str, chat_id: str) -> tuple[bool, str]:

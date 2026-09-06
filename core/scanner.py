@@ -147,9 +147,11 @@ class Scanner:
                 bot_token = app_config.get_secret("TELEGRAM_BOT_TOKEN")
                 chat_id = app_config.get_secret("TELEGRAM_CHAT_ID")
 
-                def _tg_done(ok: bool, aid: str = ad_id) -> None:
+                def _tg_done(ok: bool, error: str = "", aid: str = ad_id, title: str = ad.get("title", "")) -> None:
                     db.update_telegram_status(aid, "sent" if ok else "failed", attempts=1)
                     self.on_notification_update(aid, "telegram", ok)
+                    if not ok:
+                        self.on_log(f"❌ Telegram — envoi échoué pour « {title[:40]} » : {error}")
 
                 await telegram_service.send_ad_nowait(
                     bot_token, chat_id, ad,
@@ -319,9 +321,11 @@ class Scanner:
                 for row in failed:
                     ad_id = row["id"]
                     attempts = int(row.get("telegram_attempts") or 0) + 1
-                    ok = await telegram_service.send_ad(bot_token, chat_id, row, send_image=send_images)
+                    ok, error = await telegram_service.send_ad(bot_token, chat_id, row, send_image=send_images)
                     db.update_telegram_status(ad_id, "sent" if ok else "failed", attempts=attempts)
                     self.on_notification_update(ad_id, "telegram", ok)
+                    if not ok:
+                        self.on_log(f"❌ Telegram — nouvelle tentative échouée pour « {row.get('title', '')[:40]} » : {error}")
             except Exception as e:
                 logger.debug(f"[scanner] telegram_retry_loop error: {e}")
 

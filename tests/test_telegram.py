@@ -60,9 +60,10 @@ AD = {
 async def test_send_ad_with_photo_success(fake_session):
     fake = fake_session([FakeResponse(200, {"ok": True, "result": {}})])
 
-    ok = await telegram.send_ad("TOKEN", "123", AD, send_image=True)
+    ok, error = await telegram.send_ad("TOKEN", "123", AD, send_image=True)
 
     assert ok is True
+    assert error == ""
     assert len(fake.calls) == 1
     assert fake.calls[0][0].endswith("/sendPhoto")
     assert "Nike Tech Fleece Noir" in fake.calls[0][1]["caption"]
@@ -75,18 +76,20 @@ async def test_send_ad_photo_failure_falls_back_to_text(fake_session):
         FakeResponse(200, {"ok": True, "result": {}}),
     ])
 
-    ok = await telegram.send_ad("TOKEN", "123", AD, send_image=True)
+    ok, error = await telegram.send_ad("TOKEN", "123", AD, send_image=True)
 
     assert ok is True
+    assert error == ""
     assert [c[0].rsplit("/", 1)[-1] for c in fake.calls] == ["sendPhoto", "sendMessage"]
 
 
 async def test_send_ad_total_failure_returns_false(fake_session):
     fake_session([FakeResponse(400, {"ok": False, "description": "chat not found"})])
 
-    ok = await telegram.send_ad("TOKEN", "BADCHAT", AD, send_image=False)
+    ok, error = await telegram.send_ad("TOKEN", "BADCHAT", AD, send_image=False)
 
     assert ok is False
+    assert error == "chat not found"
     assert telegram.is_connected() is False
 
 
@@ -151,7 +154,9 @@ async def test_missing_credentials_never_calls_api(fake_session):
     fake = fake_session([])
     results = []
 
-    await telegram.send_ad_nowait("", "", AD, on_result=results.append)
+    await telegram.send_ad_nowait("", "", AD, on_result=lambda ok, error: results.append((ok, error)))
 
-    assert results == [False]
+    assert len(results) == 1
+    assert results[0][0] is False
+    assert results[0][1]  # un message d'erreur explicite, non vide
     assert fake.calls == []
