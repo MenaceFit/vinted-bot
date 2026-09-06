@@ -256,3 +256,19 @@ async def test_dispatch_records_ad_even_when_telegram_fails(clean_db, monkeypatc
     rows = await db.get_recent_listings(10)
     assert len(rows) == 1  # l'annonce est bien en base malgré l'échec Telegram
     assert rows[0]["telegram_status"] == "failed"
+
+
+def test_market_breakdown_hidden_for_single_market():
+    """Un seul marché actif : le total déjà affiché suffit, pas besoin de détail."""
+    scanner = Scanner(config_provider=lambda: {}, on_log=lambda m: None, on_new_ad=lambda ad: None)
+    assert scanner._market_breakdown({"per_market": {"uk": 0}}) == ""
+    assert scanner._market_breakdown({}) == ""
+
+
+def test_market_breakdown_shown_for_multiple_markets():
+    """Plusieurs marchés actifs : un marché resté à 0 doit être visible, pas noyé
+    dans le total agrégé (cas exact du signalement 'ça ne scanne pas UK')."""
+    scanner = Scanner(config_provider=lambda: {}, on_log=lambda m: None, on_new_ad=lambda ad: None)
+    breakdown = scanner._market_breakdown({"per_market": {"fr": 10, "uk": 0}})
+    assert "FR: 10" in breakdown
+    assert "UK: 0" in breakdown

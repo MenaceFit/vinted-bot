@@ -471,12 +471,13 @@ async def scrape_markets(
 ) -> tuple[list[dict], dict]:
     """
     Scrape tous les marchés actifs EN PARALLÈLE (asyncio.gather).
-    Renvoie (annonces, timing) où timing = {"api_ms", "parse_ms", "retries", "error"}
-    basé sur le pire marché (le chemin critique réel de ce cycle, puisque les
-    marchés tournent en parallèle et non en séquence).
+    Renvoie (annonces, timing) où timing = {"api_ms", "parse_ms", "retries", "error",
+    "per_market": {clé_marché: nb_items}} — le détail par marché permet de repérer
+    un marché qui ne renvoie jamais rien pendant qu'un autre fonctionne normalement
+    (sinon noyé dans le total agrégé).
     """
     if not active_keys:
-        return [], {"api_ms": 0.0, "parse_ms": 0.0, "retries": 0, "error": False}
+        return [], {"api_ms": 0.0, "parse_ms": 0.0, "retries": 0, "error": False, "per_market": {}}
 
     tasks = [
         _scrapers[key].scrape(params=params, keywords=keywords, per_page=per_page, keyword_key=keyword_key)
@@ -490,19 +491,25 @@ async def scrape_markets(
     api_ms = parse_ms = 0.0
     retries = 0
     error = False
+    per_market: dict[str, int] = {}
 
     for key, result in zip(active_keys, results):
         if isinstance(result, Exception):
             logger.error(f"[{key.upper()}] Erreur gather: {result}")
             error = True
+            per_market[key] = 0
             continue
         all_items.extend(result.ads)
         api_ms = max(api_ms, result.api_ms)
         parse_ms = max(parse_ms, result.parse_ms)
         retries += result.retries
         error = error or result.error
+        per_market[key] = len(result.ads)
 
-    return all_items, {"api_ms": api_ms, "parse_ms": parse_ms, "retries": retries, "error": error}
+    return all_items, {
+        "api_ms": api_ms, "parse_ms": parse_ms, "retries": retries, "error": error,
+        "per_market": per_market,
+    }
 
 
 def get_scraper_stats() -> dict:

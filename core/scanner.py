@@ -171,6 +171,17 @@ class Scanner:
                     on_result=_dc_done,
                 )
 
+    def _market_breakdown(self, timing: dict) -> str:
+        """' (FR: 10, UK: 0)' quand plusieurs marchés sont actifs — vide sinon,
+        pour ne pas alourdir le log dans le cas courant à un seul marché.
+        Sert à repérer immédiatement un marché qui ne renvoie jamais rien,
+        masqué autrement par le total agrégé."""
+        per_market = timing.get("per_market") or {}
+        if len(per_market) < 2:
+            return ""
+        parts = ", ".join(f"{k.upper()}: {v}" for k, v in per_market.items())
+        return f" ({parts})"
+
     def _emit_status(self, kt: KeywordTask) -> None:
         self.on_keyword_status(kt.keyword, {
             "status": kt.status,
@@ -241,7 +252,10 @@ class Scanner:
                     db.mark_all_seen(ads)
                     kt.warmup_done = True
                     process_ms = (time.monotonic() - t_process0) * 1000
-                    self.on_log(f"🔥 {label} Warmup — {len(ads)} annonces mémorisées. Surveillance active.")
+                    self.on_log(
+                        f"🔥 {label} Warmup — {len(ads)} annonces mémorisées"
+                        f"{self._market_breakdown(timing)}. Surveillance active."
+                    )
                     kt.status = "scanning"
                     self._emit_status(kt)
                     self.perf.record_scan(
@@ -260,7 +274,8 @@ class Scanner:
                     )
 
                 self.on_log(
-                    f"🔍 {label} Scan #{kt.scan_count} — {len(ads)} items, "
+                    f"🔍 {label} Scan #{kt.scan_count} — {len(ads)} items"
+                    f"{self._market_breakdown(timing)}, "
                     f"{len(new_ads)} nouvelle(s) ({timing['api_ms']:.0f}ms API)"
                 )
 
