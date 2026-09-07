@@ -522,6 +522,53 @@ async def scrape_markets(
     }
 
 
+async def test_market_connectivity(key: str, keyword: str = "") -> dict:
+    """Teste un marché de bout en bout (init session + un appel API réel) et
+    renvoie un diagnostic exploitable directement dans l'UI — pas besoin d'un
+    terminal pour savoir si un marché fonctionne."""
+    scraper = _scrapers.get(key)
+    if scraper is None:
+        return {"market": key, "ok": False, "items": 0, "reason": "marché inconnu"}
+
+    try:
+        if not scraper._initialized:
+            await scraper._init_session()
+        if not scraper._initialized:
+            return {"market": key, "ok": False, "items": 0, "reason": "session non établie (cookies/CSRF)"}
+
+        params = {"order": "newest_first"}
+        if keyword:
+            params["search_text"] = keyword
+        items, retries = await scraper.fetch_raw(params, per_page=5)
+
+        if not items:
+            return {"market": key, "ok": False, "items": 0, "reason": f"0 item reçu après {retries} retry(s)"}
+
+        sample = items[0]
+        title_present = bool(sample.get("title"))
+        price_present = bool(sample.get("price_numeric") or sample.get("total_item_price") or sample.get("price"))
+        if not (title_present and price_present):
+            missing = [n for n, present in (("title", title_present), ("price", price_present)) if not present]
+            return {"market": key, "ok": False, "items": len(items), "reason": f"champs manquants dans la réponse: {missing}"}
+
+        return {"market": key, "ok": True, "items": len(items), "reason": ""}
+
+    except Exception as e:
+        return {"market": key, "ok": False, "items": 0, "reason": f"exception: {e}"}
+
+
+async def test_all_markets(keyword: str = "") -> list[dict]:
+    """Teste tous les marchés connus EN PARALLÈLE. Voir test_market_connectivity."""
+    results = await asyncio.gather(*(test_market_connectivity(key, keyword) for key in MARKETS), return_exceptions=True)
+    out = []
+    for key, result in zip(MARKETS, results):
+        if isinstance(result, Exception):
+            out.append({"market": key, "ok": False, "items": 0, "reason": f"exception: {result}"})
+        else:
+            out.append(result)
+    return out
+
+
 def get_scraper_stats() -> dict:
     return {key: scraper.stats.copy() for key, scraper in _scrapers.items()}
 

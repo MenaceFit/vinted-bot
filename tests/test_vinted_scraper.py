@@ -3,7 +3,9 @@ Scraper Vinted : retry sur erreur réseau, abandon propre après le nombre
 maximal de tentatives. Aucun appel réseau réel (session monkeypatchée).
 """
 import aiohttp
+import pytest
 
+import services.vinted as vinted_module
 from services.vinted import MARKETS, MAX_RETRY, MarketScraper
 
 
@@ -125,3 +127,67 @@ async def test_scrape_reports_saturation_via_result_length(monkeypatch):
 
     assert len(result.ads) == 10
     assert result.error is False
+
+
+# ── Test de connectivité par marché (bouton "🔬 Tester les 3 marchés") ──────
+
+@pytest.fixture
+def reset_scrapers():
+    """Les MarketScraper testés ici sont les singletons partagés de
+    services.vinted._scrapers — on restaure leur état pour ne pas polluer
+    les autres tests qui les utilisent (ils sont réutilisés par toute l'app)."""
+    saved = {k: (s._initialized, s._last_init_attempt) for k, s in vinted_module._scrapers.items()}
+    yield
+    for k, (initialized, last_attempt) in saved.items():
+        vinted_module._scrapers[k]._initialized = initialized
+        vinted_module._scrapers[k]._last_init_attempt = last_attempt
+
+
+async def test_market_connectivity_reports_success(monkeypatch, reset_scrapers):
+    scraper = vinted_module._scrapers["uk"]
+    scraper._initialized = True
+    fake = FakeResponse(200, {"items": [{"id": 1, "title": "Nike Tech Fleece", "price_numeric": "45.0"}]})
+    monkeypatch.setattr(scraper, "_get_session", lambda: FakeSession([fake]))
+
+    result = await vinted_module.test_market_connectivity("uk")
+
+    assert result == {"market": "uk", "ok": True, "items": 1, "reason": ""}
+
+
+async def test_market_connectivity_reports_session_never_established(monkeypatch, reset_scrapers):
+    scraper = vinted_module._scrapers["uk"]
+    scraper._initialized = False
+    monkeypatch.setattr(scraper, "_init_session", _noop_reinit)
+
+    result = await vinted_module.test_market_connectivity("uk")
+
+    assert result["ok"] is False
+    assert result["market"] == "uk"
+    assert "session" in result["reason"]
+
+
+async def test_market_connectivity_reports_missing_fields(monkeypatch, reset_scrapers):
+    """Reproduit le signalement 'titre/prix vides' : items reçus mais sans
+    les champs attendus doit être un échec explicite, pas un faux succès."""
+    scraper = vinted_module._scrapers["pl"]
+    scraper._initialized = True
+    fake = FakeResponse(200, {"items": [{"id": 1}]})  # ni title ni price
+    monkeypatch.setattr(scraper, "_get_session", lambda: FakeSession([fake]))
+
+    result = await vinted_module.test_market_connectivity("pl")
+
+    assert result["ok"] is False
+    assert "title" in result["reason"] and "price" in result["reason"]
+
+
+async def test_all_markets_tests_fr_uk_pl(monkeypatch, reset_scrapers):
+    for key in vinted_module.MARKETS:
+        scraper = vinted_module._scrapers[key]
+        scraper._initialized = True
+        fake = FakeResponse(200, {"items": [{"id": 1, "title": "X", "price_numeric": "1"}]})
+        monkeypatch.setattr(scraper, "_get_session", lambda fake=fake: FakeSession([fake]))
+
+    results = await vinted_module.test_all_markets()
+
+    assert {r["market"] for r in results} == {"fr", "uk", "pl"}
+    assert all(r["ok"] for r in results)

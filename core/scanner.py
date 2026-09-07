@@ -35,8 +35,10 @@ from services.vinted import PER_PAGE_DEFAULT, PER_PAGE_WARMUP, extract_params_fr
 logger = logging.getLogger(__name__)
 
 # Plancher de sécurité : quelle que soit la config, on ne descend jamais
-# en dessous pour éviter de marteler l'API Vinted (voir spec: min 5s conseillé).
-MIN_INTERVAL_SECONDS = 5.0
+# en dessous. 3s reste raisonnable pour un usage perso (retry/backoff dédiés
+# gèrent déjà un vrai 429) ; 5-8s reste recommandé pour limiter le risque de
+# rate-limit si plusieurs mots-clés/marchés tournent en même temps.
+MIN_INTERVAL_SECONDS = 3.0
 
 OnLog = Callable[[str], None]
 OnNewAd = Callable[[dict], None]
@@ -242,8 +244,11 @@ class Scanner:
                         api_ms=timing["api_ms"], parse_ms=timing["parse_ms"], process_ms=0.0,
                         retries=timing.get("retries", 0),
                     )
-                    # 0 résultat : attente plus longue pour éviter de marteler l'API inutilement
-                    await asyncio.sleep(min(kt.interval * 2, 30))
+                    # 0 item brut (pas juste 0 nouvelle) : le vrai rate-limit (429) a déjà
+                    # son propre backoff dans fetch_raw (Retry-After) — doubler l'attente
+                    # ici en plus était redondant et ralentissait la reprise d'un marché
+                    # qui recommence à répondre normalement, à l'encontre de la vitesse.
+                    await asyncio.sleep(kt.interval)
                     continue
 
                 t_process0 = time.monotonic()

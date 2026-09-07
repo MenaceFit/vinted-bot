@@ -2,6 +2,7 @@
 import tkinter as tk
 
 from gui import theme
+from services import vinted as vinted_service
 
 
 class ScannerView(tk.Frame):
@@ -47,16 +48,21 @@ class ScannerView(tk.Frame):
             ).pack(anchor="w")
             self._market_vars[key] = var
 
+        theme.button(
+            left, "🔬 Tester les 3 marchés (FR/UK/PL)", self._test_markets,
+            bg=theme.PANEL2, fg=theme.ACCENT,
+        ).pack(fill="x", pady=(6, 0))
+
         interval_row = tk.Frame(left, bg=theme.PANEL)
         interval_row.pack(fill="x", pady=(14, 4))
         tk.Label(interval_row, text="Intervalle (s)", font=theme.FONT_BODY, bg=theme.PANEL, fg=theme.TEXT2).pack(side="left")
         self._interval_var = tk.StringVar(value=str(self.app.config_data.get("interval_seconds", 8)))
         tk.Spinbox(
-            interval_row, from_=5, to=300, width=6, textvariable=self._interval_var,
+            interval_row, from_=3, to=300, width=6, textvariable=self._interval_var,
             bg=theme.PANEL2, fg=theme.TEXT, insertbackground=theme.TEXT, relief="flat",
             buttonbackground=theme.PANEL2,
         ).pack(side="left", padx=6)
-        tk.Label(interval_row, text="(min 5s)", font=theme.FONT_SMALL, bg=theme.PANEL, fg=theme.TEXT2).pack(side="left")
+        tk.Label(interval_row, text="(min 3s — 5-8s conseillé)", font=theme.FONT_SMALL, bg=theme.PANEL, fg=theme.TEXT2).pack(side="left")
 
         theme.button(left, "💾 Sauvegarder", self._save_settings, bg=theme.PANEL2, fg=theme.ACCENT).pack(fill="x", pady=(14, 4))
 
@@ -148,7 +154,7 @@ class ScannerView(tk.Frame):
     def _save_settings(self) -> None:
         cfg = self.app.config_data
         try:
-            cfg["interval_seconds"] = max(5, int(self._interval_var.get()))
+            cfg["interval_seconds"] = max(3, int(self._interval_var.get()))
         except ValueError:
             pass
         for key, var in self._market_vars.items():
@@ -172,3 +178,20 @@ class ScannerView(tk.Frame):
     def _scan_now(self) -> None:
         self._save_settings()
         self.app.scanner.run_once()
+
+    def _test_markets(self) -> None:
+        """Teste FR/UK/PL en direct (init session + un vrai appel API chacun)
+        et affiche le résultat dans les logs — pas besoin de terminal."""
+        self.app._on_log("🔬 Test des 3 marchés en cours...")
+        self.app.run_async(vinted_service.test_all_markets(), self._on_test_markets_result)
+
+    def _on_test_markets_result(self, results) -> None:
+        if isinstance(results, Exception):
+            self.app._on_log(f"🔬 Test marchés — erreur inattendue : {results}")
+            return
+        for r in results:
+            key = r["market"].upper()
+            if r["ok"]:
+                self.app._on_log(f"🔬 {key} ✅ opérationnel — {r['items']} annonce(s) reçue(s)")
+            else:
+                self.app._on_log(f"🔬 {key} ❌ échec — {r['reason']}")

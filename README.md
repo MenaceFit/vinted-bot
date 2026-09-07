@@ -33,7 +33,7 @@ Le Bot Token et le Chat ID sont stockés dans `.env` (jamais dans
 ## 🎯 Utilisation
 
 1. Onglet **🔎 Scanner** : ajoute tes mots-clés (`Nike`, `Jordan`, `Supreme`...),
-   coche les marchés (FR/PL/UK), règle l'intervalle (5s minimum).
+   coche les marchés (FR/PL/UK), règle l'intervalle (3s minimum, 5-8s conseillé).
 2. **🟢 DÉMARRER**. Le premier cycle de chaque mot-clé est un *warmup* : il
    mémorise les annonces déjà en ligne sans notifier, pour éviter un déluge
    de notifications sur des annonces existantes.
@@ -198,6 +198,14 @@ conservé cette base et corrigé :
 
 ## ❓ Dépannage
 
+**Un marché ne renvoie rien (ex: UK)** → onglet 🔎 Scanner, bouton
+**🔬 Tester les 3 marchés** : teste FR/UK/PL en direct et affiche dans les
+logs, pour chacun, soit "✅ opérationnel" soit la raison exacte de l'échec
+(session non établie, 0 item, champs manquants). Pas besoin de terminal.
+Si un marché échoue avec des champs manquants ou reste à 0 malgré une
+session valide, vérifie dans **⚙️ Settings** que Catalog IDs / Brand IDs
+sont vides — ce sont des IDs Vinted internes qui ne correspondent pas
+forcément à la même catégorie sur tous les marchés.
 **0 annonce reçue** → session Vinted expirée, réinitialisation automatique
 au prochain scan.
 **Telegram : "chat not found"** → le Chat ID est faux, ou tu n'as jamais
@@ -207,5 +215,5 @@ Telegram (taille, format) ; le texte part quand même automatiquement, c'est
 le comportement voulu.
 **Trop de notifications au démarrage** → vérifie que "Warmup au premier
 scan" est coché (Settings).
-**Scan lent** → vérifie ta connexion, l'intervalle configuré (5s minimum),
-et le nombre de mots-clés/marchés actifs simultanément.
+**Scan lent** → vérifie ta connexion, l'intervalle configuré (3s minimum,
+5-8s conseillé), et le nombre de mots-clés/marchés actifs simultanément.
