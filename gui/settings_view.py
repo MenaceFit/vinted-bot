@@ -35,6 +35,29 @@ class SettingsView(tk.Frame):
         self._max_price.insert(0, str(v2) if v2 is not None else "")
         self._max_price.pack(side="left", padx=6, ipady=4)
 
+        cat_row = tk.Frame(filters, bg=theme.PANEL)
+        cat_row.pack(fill="x", pady=(0, 4))
+        tk.Label(cat_row, text="Catalog IDs", bg=theme.PANEL, fg=theme.TEXT2, font=theme.FONT_BODY, width=12, anchor="w").pack(side="left")
+        self._catalog_ids = tk.Entry(cat_row, bg=theme.PANEL2, fg=theme.TEXT, insertbackground=theme.TEXT, relief="flat")
+        self._catalog_ids.insert(0, ", ".join(cfg.get("catalog_ids", [])))
+        self._catalog_ids.pack(side="left", fill="x", expand=True, ipady=4)
+
+        brand_row = tk.Frame(filters, bg=theme.PANEL)
+        brand_row.pack(fill="x", pady=(4, 2))
+        tk.Label(brand_row, text="Brand IDs", bg=theme.PANEL, fg=theme.TEXT2, font=theme.FONT_BODY, width=12, anchor="w").pack(side="left")
+        self._brand_ids = tk.Entry(brand_row, bg=theme.PANEL2, fg=theme.TEXT, insertbackground=theme.TEXT, relief="flat")
+        self._brand_ids.insert(0, ", ".join(cfg.get("brand_ids", [])))
+        self._brand_ids.pack(side="left", fill="x", expand=True, ipady=4)
+
+        tk.Label(
+            filters,
+            text="Optionnel, IDs numériques séparés par des virgules — laisse vide sauf besoin précis. "
+                 "Ce sont des IDs internes Vinted qui ne correspondent pas forcément à la même catégorie/marque "
+                 "sur tous les marchés : une valeur invalide pour un marché donné le fait renvoyer 0 résultat "
+                 "en silence même avec une session valide. Le mot-clé (onglet Scanner) suffit dans la majorité des cas.",
+            bg=theme.PANEL, fg=theme.TEXT2, font=theme.FONT_SMALL, wraplength=500, justify="left",
+        ).pack(anchor="w", pady=(0, 10))
+
         tk.Label(filters, text="URL Vinted personnalisée (remplace catalogue/marque/prix ci-dessus)",
                  bg=theme.PANEL, fg=theme.TEXT2, font=theme.FONT_SMALL, wraplength=500, justify="left").pack(anchor="w")
         self._custom_url = tk.Text(filters, height=2, bg=theme.PANEL2, fg=theme.TEXT, insertbackground=theme.TEXT,
@@ -101,6 +124,8 @@ class SettingsView(tk.Frame):
 
         cfg["min_price"] = _parse_price(self._min_price)
         cfg["max_price"] = _parse_price(self._max_price)
+        cfg["catalog_ids"] = [v.strip() for v in self._catalog_ids.get().split(",") if v.strip()]
+        cfg["brand_ids"] = [v.strip() for v in self._brand_ids.get().split(",") if v.strip()]
         cfg["custom_url"] = self._custom_url.get("1.0", "end").strip()
         cfg["warmup_first_run"] = self._warmup_var.get()
         self.app.save_config()

@@ -94,6 +94,27 @@ async def test_fetch_raw_handles_rate_limit_then_succeeds(monkeypatch):
     assert fake.calls == 2
 
 
+async def test_fetch_raw_session_never_initialized_is_a_visible_error(monkeypatch):
+    """Régression : si la session n'est jamais établie pour un marché (init
+    échouée ou encore en cooldown), fetch_raw renvoyait ([], 0) — indiscernable
+    d'un cycle qui a réussi mais n'a rien trouvé. Un marché en échec devait
+    apparaître comme une vraie erreur (comptée + retries > 0), pas comme un
+    simple '0 résultat' silencieux."""
+    scraper = MarketScraper("uk", MARKETS["uk"])
+    scraper._initialized = False
+
+    async def _init_never_succeeds(self=None):
+        return None  # ne met jamais self._initialized à True
+
+    monkeypatch.setattr(scraper, "_init_session", _init_never_succeeds)
+
+    items, retries = await scraper.fetch_raw({}, per_page=10)
+
+    assert items == []
+    assert retries >= 1
+    assert scraper.stats["errors"] == 1
+
+
 async def test_scrape_reports_saturation_via_result_length(monkeypatch):
     """Si autant d'items sont reçus que demandé (per_page), l'appelant
     (Scanner) doit pouvoir détecter qu'on a peut-être manqué des annonces."""

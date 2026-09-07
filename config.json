@@ -3,8 +3,8 @@
   "warmup_first_run": true,
   "min_price": null,
   "max_price": null,
-  "catalog_ids": ["2050"],
-  "brand_ids": ["53"],
+  "catalog_ids": [],
+  "brand_ids": [],
   "keywords_filter": [],
   "custom_url": "",
   "markets": {

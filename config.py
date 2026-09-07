@@ -76,8 +76,14 @@ def _default_config() -> dict:
         "warmup_first_run": True,
         "min_price": None,
         "max_price": None,
-        "catalog_ids": ["2050"],
-        "brand_ids": ["53"],
+        # Vides par défaut à dessein : les catalog_ids/brand_ids sont des IDs
+        # numériques internes Vinted qui ne correspondent pas forcément à la
+        # même catégorie/marque sur tous les marchés (FR/UK/PL). Un filtre
+        # numérique invalide pour un marché renvoie silencieusement 0 résultat
+        # même avec une session valide — le mot-clé (search_text) suffit et
+        # fonctionne de façon identique sur tous les marchés.
+        "catalog_ids": [],
+        "brand_ids": [],
         "keywords_filter": [],
         "custom_url": "",
         "markets": {

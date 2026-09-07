@@ -154,7 +154,11 @@ class MarketScraper:
         self._session: Optional[aiohttp.ClientSession] = None
         self._csrf: Optional[str] = None
         self._initialized = False
-        self._last_init_attempt = 0.0
+        # -inf : garantit que la toute première tentative d'init n'est jamais
+        # sautée par erreur si time.monotonic() démarre proche de 0 (dépend
+        # de la plateforme) — avant, 0.0 pouvait faire échouer silencieusement
+        # le tout premier scan d'un marché.
+        self._last_init_attempt = float("-inf")
         self._consecutive_failures = 0
 
         self.stats = {
@@ -255,7 +259,13 @@ class MarketScraper:
         if not self._initialized:
             await self._init_session()
         if not self._initialized:
-            return [], 0
+            # Session jamais établie pour ce marché (ou encore en cooldown après
+            # un échec précédent) : on le compte comme une vraie erreur — sinon
+            # ça remonte comme "0 items" indiscernable d'un cycle silencieusement
+            # calme, et le marché a l'air juste "ne rien trouver" indéfiniment.
+            logger.warning(f"[{self.key.upper()}] Session non établie — scan sauté")
+            self.stats["errors"] += 1
+            return [], 1
 
         merged = {
             **params,
