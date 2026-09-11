@@ -115,15 +115,18 @@ nav { flex: 1; padding: 10px 8px; }
 #toggle-btn { min-width: 140px; font-size: 14px; }
 
 /* ── Keyword pills ── */
-#kw-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .kw-pill {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 6px;
   background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 20px; padding: 4px 12px; font-size: 13px;
+  border-radius: 10px; padding: 6px 10px; font-size: 13px;
+  width: 100%;
 }
 .kw-pill .kw-status { font-size: 11px; }
 .kw-remove { background: none; border: none; cursor: pointer; color: var(--text2); font-size: 16px; line-height: 1; padding: 0; }
 .kw-remove:hover { color: var(--red); }
+.kw-settings-btn:hover { color: var(--accent2) !important; }
+.kw-extra { display: none; }
+#kw-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 
 /* ── Items feed ── */
 #items-feed { display: flex; flex-direction: column; gap: 10px; }
@@ -422,7 +425,10 @@ input:checked + .slider:before { transform: translateX(16px); }
     <div id="logbar">
       <div id="logbar-header">
         <span>📋 Logs temps réel</span>
-        <button class="btn btn-ghost btn-sm" onclick="clearLogs()">Vider</button>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button id="sound-btn" class="btn btn-ghost btn-sm" onclick="toggleSound()" title="Activer/désactiver le son">🔕</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearLogs()">Vider</button>
+        </div>
       </div>
       <div id="logs"></div>
     </div>
@@ -477,6 +483,7 @@ function handleMsg(msg) {
       break;
     case 'new_ad':
       addAdToFeed(msg.ad, true);
+      if (soundEnabled) playSoundBeep();
       break;
     case 'autobuy_result':
       handleAutobuyResult(msg.result);
@@ -522,13 +529,16 @@ function updateRunningUI() {
   }
 }
 
-// ── Keywords ─────────────────────────────────────────────────────────────────
+// ── Keywords (per-keyword config) ────────────────────────────────────────────
+function _kwText(k) { return typeof k === 'string' ? k : (k.text || ''); }
+function _kwCfg(k) { return typeof k === 'object' && k !== null ? k : {text: k}; }
+
 function addKeyword() {
   const input = document.getElementById('kw-input');
   const kw = input.value.trim();
   if (!kw) return;
   if (!config.keywords_filter) config.keywords_filter = [];
-  if (config.keywords_filter.includes(kw)) return;
+  if (config.keywords_filter.some(k => _kwText(k) === kw)) return;
   config.keywords_filter.push(kw);
   input.value = '';
   renderKeywords();
@@ -536,8 +546,17 @@ function addKeyword() {
 }
 
 function removeKeyword(kw) {
-  config.keywords_filter = (config.keywords_filter || []).filter(k => k !== kw);
+  config.keywords_filter = (config.keywords_filter || []).filter(k => _kwText(k) !== kw);
   renderKeywords();
+  patchConfig({keywords_filter: config.keywords_filter});
+}
+
+function updateKwField(kw, field, value) {
+  const idx = (config.keywords_filter || []).findIndex(k => _kwText(k) === kw);
+  if (idx < 0) return;
+  const entry = _kwCfg(config.keywords_filter[idx]);
+  entry[field] = value === '' ? null : value;
+  config.keywords_filter[idx] = entry;
   patchConfig({keywords_filter: config.keywords_filter});
 }
 
@@ -545,13 +564,44 @@ function renderKeywords() {
   const el = document.getElementById('kw-list');
   const kws = config.keywords_filter || [];
   if (!kws.length) { el.innerHTML = '<span style="color:var(--text2);font-size:12px">Aucun mot-clé — surveillance globale</span>'; return; }
-  el.innerHTML = kws.map(kw => `
-    <div class="kw-pill" id="kw-${CSS.escape(kw)}">
-      ${escHtml(kw)}
-      <span class="kw-status" id="kws-${CSS.escape(kw)}"></span>
-      <button class="kw-remove" data-kw="${escHtml(kw)}" title="Supprimer">×</button>
-    </div>
-  `).join('');
+  el.innerHTML = kws.map(k => {
+    const text = _kwText(k);
+    const cfg = _kwCfg(k);
+    const id = CSS.escape(text);
+    return `
+    <div class="kw-pill" id="kw-${id}" style="flex-direction:column;align-items:flex-start;padding:8px 10px;gap:4px">
+      <div style="display:flex;align-items:center;gap:6px;width:100%">
+        ${escHtml(text)}
+        <span class="kw-status" id="kws-${id}"></span>
+        <button class="kw-settings-btn" data-kw="${escHtml(text)}" title="Réglages" style="margin-left:auto;background:none;border:none;color:var(--text2);cursor:pointer;font-size:13px;padding:0 2px">⚙</button>
+        <button class="kw-remove" data-kw="${escHtml(text)}" title="Supprimer" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px;padding:0 2px">×</button>
+      </div>
+      <div class="kw-extra" id="kwx-${id}" style="display:none;width:100%;gap:6px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--text2);display:flex;align-items:center;gap:4px">
+          Interval (s)
+          <input type="number" min="1" step="1" placeholder="global"
+            value="${escHtml(cfg.interval ?? '')}"
+            style="width:60px;padding:2px 4px;font-size:11px"
+            data-kw="${escHtml(text)}" data-field="interval"
+            onchange="updateKwField(this.dataset.kw,'interval',this.value?+this.value:null)">
+        </label>
+        <label style="font-size:11px;color:var(--text2);display:flex;align-items:center;gap:4px">
+          Prix max (€)
+          <input type="number" min="0" step="1" placeholder="global"
+            value="${escHtml(cfg.max_price ?? '')}"
+            style="width:70px;padding:2px 4px;font-size:11px"
+            data-kw="${escHtml(text)}" data-field="max_price"
+            onchange="updateKwField(this.dataset.kw,'max_price',this.value?+this.value:null)">
+        </label>
+        <label style="font-size:11px;color:var(--text2);display:flex;align-items:center;gap:4px">
+          <input type="checkbox" ${cfg.autobuy_enabled === false ? '' : 'checked'}
+            data-kw="${escHtml(text)}"
+            onchange="updateKwField(this.dataset.kw,'autobuy_enabled',this.checked)">
+          Autobuy
+        </label>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function updateKeywordPill(kw, status) {
@@ -854,10 +904,40 @@ async function testArticle() {
   } catch(e) { out.innerHTML = `<span style="color:var(--red)">❌ Erreur: ${e}</span>`; }
 }
 
+// ── Sound notifications ───────────────────────────────────────────────────────
+let soundEnabled = false;
+try { soundEnabled = localStorage.getItem('sound_enabled') === '1'; } catch(_){}
+
+function playSoundBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = 'sine'; osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.4);
+  } catch(_){}
+}
+
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  try { localStorage.setItem('sound_enabled', soundEnabled ? '1' : '0'); } catch(_){}
+  document.getElementById('sound-btn').textContent = soundEnabled ? '🔔' : '🔕';
+  if (soundEnabled) playSoundBeep();
+}
+
 // ── Delegated event listeners ─────────────────────────────────────────────────
 document.getElementById('kw-list').addEventListener('click', e => {
-  const btn = e.target.closest('.kw-remove');
-  if (btn) removeKeyword(btn.dataset.kw);
+  const rm = e.target.closest('.kw-remove');
+  if (rm) { removeKeyword(rm.dataset.kw); return; }
+  const cfg = e.target.closest('.kw-settings-btn');
+  if (cfg) {
+    const id = CSS.escape(cfg.dataset.kw);
+    const extra = document.getElementById(`kwx-${id}`);
+    if (extra) extra.style.display = extra.style.display === 'none' ? 'flex' : 'none';
+  }
 });
 // Buy buttons appear in both feed and dashboard-feed
 document.addEventListener('click', e => {
@@ -867,6 +947,7 @@ document.addEventListener('click', e => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 connect();
+document.getElementById('sound-btn').textContent = soundEnabled ? '🔔' : '🔕';
 </script>
 </body>
 </html>

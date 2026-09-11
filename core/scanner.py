@@ -34,15 +34,40 @@ from services.vinted import PER_PAGE_DEFAULT, PER_PAGE_WARMUP, extract_params_fr
 
 logger = logging.getLogger(__name__)
 
-# Plancher de sécurité : quelle que soit la config, on ne descend jamais
-# en dessous. 3s reste raisonnable pour un usage perso (retry/backoff dédiés
-# gèrent déjà un vrai 429) ; 5-8s reste recommandé pour limiter le risque de
-# rate-limit si plusieurs mots-clés/marchés tournent en même temps.
-MIN_INTERVAL_SECONDS = 3.0
+# Plancher de sécurité absolu. En dessous de 1s on risque un 429 quasi-certain
+# même avec une seule requête. La valeur recommandée reste 5-8s en prod avec
+# plusieurs mots-clés/marchés ; 1s est réservé aux configs à mot-clé unique
+# et marché unique sur une connexion stable.
+MIN_INTERVAL_SECONDS = 1.0
 
 OnLog = Callable[[str], None]
 OnNewAd = Callable[[dict], None]
 OnKeywordStatus = Callable[[str, dict], None]
+
+
+def _parse_kw_list(raw: list) -> list[dict]:
+    """Normalise keywords_filter : accepte strings et dicts.
+
+    Entrée :  ["nike", {"text": "jordan", "interval": 3, "max_price": 100}]
+    Sortie :  [{"text": "nike", "interval": None, "max_price": None, ...}, ...]
+    """
+    out = []
+    for item in raw:
+        if isinstance(item, str):
+            out.append({"text": item.strip(), "interval": None, "max_price": None,
+                        "autobuy_enabled": None, "autobuy_max_price": None,
+                        "brand_ids": None, "size_ids": None})
+        elif isinstance(item, dict):
+            out.append({
+                "text": str(item.get("text", "")).strip(),
+                "interval": item.get("interval"),
+                "max_price": item.get("max_price"),
+                "autobuy_enabled": item.get("autobuy_enabled"),
+                "autobuy_max_price": item.get("autobuy_max_price"),
+                "brand_ids": item.get("brand_ids"),
+                "size_ids": item.get("size_ids"),
+            })
+    return [k for k in out if k["text"] or True]  # keep empty-string global
 
 
 @dataclass
@@ -52,6 +77,7 @@ class KeywordTask:
     active_keys: list[str]
     params: dict
     interval: float
+    kw_cfg: dict = field(default_factory=dict)
     warmup_done: bool = False
     scan_count: int = 0
     new_total: int = 0
@@ -131,47 +157,53 @@ class Scanner:
         discord_enabled = bool(dc.get("enabled") and app_config.get_secret("DISCORD_WEBHOOK_URL"))
         return telegram_enabled, discord_enabled
 
-    async def _dispatch_new_ads(self, new_ads: list[dict], cfg: dict) -> None:
-        """Anti-doublon déjà fait par l'appelant. Ici : Database → Telegram/Discord → Interface."""
-        telegram_enabled, discord_enabled = self._notification_state(cfg)
+    async def _dispatch_one(self, ad: dict, cfg: dict, telegram_enabled: bool, discord_enabled: bool) -> None:
+        """Dispatch Database + Telegram + Discord pour une seule annonce."""
         tg_cfg = cfg.get("telegram", {})
+        ad_id = ad.get("id", "")
+        db.record_listing(
+            ad,
+            telegram_status="pending" if telegram_enabled else "disabled",
+            discord_status="pending" if discord_enabled else "disabled",
+        )
+        self.on_new_ad(ad)
 
-        for ad in new_ads:
-            ad_id = ad.get("id", "")
-            db.record_listing(
-                ad,
-                telegram_status="pending" if telegram_enabled else "disabled",
-                discord_status="pending" if discord_enabled else "disabled",
-            )
-            self.on_new_ad(ad)
+        coros = []
+        if telegram_enabled:
+            bot_token = app_config.get_secret("TELEGRAM_BOT_TOKEN")
+            chat_id = app_config.get_secret("TELEGRAM_CHAT_ID")
 
-            if telegram_enabled:
-                bot_token = app_config.get_secret("TELEGRAM_BOT_TOKEN")
-                chat_id = app_config.get_secret("TELEGRAM_CHAT_ID")
+            def _tg_done(ok: bool, error: str = "", aid: str = ad_id, title: str = ad.get("title", "")) -> None:
+                db.update_telegram_status(aid, "sent" if ok else "failed", attempts=1)
+                self.on_notification_update(aid, "telegram", ok)
+                if not ok:
+                    self.on_log(f"❌ Telegram — envoi échoué pour « {title[:40]} » : {error}")
 
-                def _tg_done(ok: bool, error: str = "", aid: str = ad_id, title: str = ad.get("title", "")) -> None:
-                    db.update_telegram_status(aid, "sent" if ok else "failed", attempts=1)
-                    self.on_notification_update(aid, "telegram", ok)
-                    if not ok:
-                        self.on_log(f"❌ Telegram — envoi échoué pour « {title[:40]} » : {error}")
+            coros.append(telegram_service.send_ad_nowait(
+                bot_token, chat_id, ad,
+                send_image=tg_cfg.get("send_images", True),
+                on_result=_tg_done,
+            ))
 
-                await telegram_service.send_ad_nowait(
-                    bot_token, chat_id, ad,
-                    send_image=tg_cfg.get("send_images", True),
-                    on_result=_tg_done,
-                )
+        if discord_enabled:
+            webhook_url = app_config.get_secret("DISCORD_WEBHOOK_URL")
 
-            if discord_enabled:
-                webhook_url = app_config.get_secret("DISCORD_WEBHOOK_URL")
+            def _dc_done(ok: bool, aid: str = ad_id) -> None:
+                db.update_discord_status(aid, "sent" if ok else "failed")
+                self.on_notification_update(aid, "discord", ok)
 
-                def _dc_done(ok: bool, aid: str = ad_id) -> None:
-                    db.update_discord_status(aid, "sent" if ok else "failed")
-                    self.on_notification_update(aid, "discord", ok)
+            coros.append(discord_service.send_ad_nowait(webhook_url, ad, on_result=_dc_done))
 
-                await discord_service.send_ad_nowait(
-                    webhook_url, ad,
-                    on_result=_dc_done,
-                )
+        if coros:
+            await asyncio.gather(*coros, return_exceptions=True)
+
+    async def _dispatch_new_ads(self, new_ads: list[dict], cfg: dict) -> None:
+        """Anti-doublon déjà fait par l'appelant. Dispatch parallèle : Database → Telegram/Discord → Interface."""
+        telegram_enabled, discord_enabled = self._notification_state(cfg)
+        await asyncio.gather(
+            *[self._dispatch_one(ad, cfg, telegram_enabled, discord_enabled) for ad in new_ads],
+            return_exceptions=True,
+        )
 
     def _market_breakdown(self, timing: dict) -> str:
         """' (FR: 10, UK: 0)' quand plusieurs marchés sont actifs — vide sinon,
@@ -205,11 +237,26 @@ class Scanner:
                 cfg = self.config_provider()
                 kt.active_keys = self._get_active_keys(cfg)
                 kt.params = self._build_base_params(cfg)
-                kt.interval = max(MIN_INTERVAL_SECONDS, float(cfg.get("interval_seconds", 10)))
+
+                # Intervalle : per-keyword > global, plancher absolu MIN_INTERVAL_SECONDS
+                global_interval = max(MIN_INTERVAL_SECONDS, float(cfg.get("interval_seconds", 10)))
+                kw_interval = kt.kw_cfg.get("interval")
+                kt.interval = max(MIN_INTERVAL_SECONDS, float(kw_interval)) if kw_interval is not None else global_interval
 
                 params = dict(kt.params)
                 if kt.keyword:
                     params["search_text"] = kt.keyword
+
+                # Filtres per-keyword (surcharge les filtres globaux)
+                kw_max_price = kt.kw_cfg.get("max_price")
+                if kw_max_price is not None:
+                    params["price_to"] = str(kw_max_price)
+                kw_brand_ids = kt.kw_cfg.get("brand_ids")
+                if kw_brand_ids:
+                    params["brand_ids[]"] = kw_brand_ids
+                kw_size_ids = kt.kw_cfg.get("size_ids")
+                if kw_size_ids:
+                    params["size_ids[]"] = kw_size_ids
 
                 ads, timing = await self._scrape_fn(
                     active_keys=kt.active_keys,
@@ -298,7 +345,15 @@ class Scanner:
 
                 kt.status = "scanning"
                 self._emit_status(kt)
-                await asyncio.sleep(kt.interval)
+
+                # Intervalle adaptatif : si nouvelles annonces trouvées, rescan
+                # plus tôt pour ne pas rater la prochaine vague (moitié de
+                # l'intervalle, plancher MIN_INTERVAL_SECONDS).
+                if new_ads:
+                    sleep_time = max(MIN_INTERVAL_SECONDS, kt.interval / 2)
+                else:
+                    sleep_time = kt.interval
+                await asyncio.sleep(sleep_time)
 
             except asyncio.CancelledError:
                 logger.info(f"Tâche annulée {label}")
@@ -387,8 +442,8 @@ class Scanner:
         cfg = self.config_provider()
         active_keys = self._get_active_keys(cfg)
         params = self._build_base_params(cfg)
-        keywords = [k.strip() for k in cfg.get("keywords_filter", []) if k.strip()]
-        kws_to_run = keywords or [""]
+        kw_cfgs = _parse_kw_list(cfg.get("keywords_filter", []))
+        kws_to_run = [k["text"] for k in kw_cfgs] if kw_cfgs else [""]
 
         t0 = time.monotonic()
         tasks = []
@@ -442,22 +497,28 @@ class Scanner:
         active_keys = self._get_active_keys(cfg)
         params = self._build_base_params(cfg)
         interval = max(MIN_INTERVAL_SECONDS, float(cfg.get("interval_seconds", 10)))
-        keywords = [k.strip() for k in cfg.get("keywords_filter", []) if k.strip()]
-        kws_to_watch = keywords if keywords else [""]
+        kw_cfgs = _parse_kw_list(cfg.get("keywords_filter", []))
+        kws_to_watch = kw_cfgs if kw_cfgs else [{"text": "", "interval": None, "max_price": None,
+                                                   "autobuy_enabled": None, "autobuy_max_price": None,
+                                                   "brand_ids": None, "size_ids": None}]
 
         # Toute la création de Task se fait à l'intérieur de la loop asyncio,
         # en une seule fois — c'est le fix du bug de double-scan (voir docstring).
         self._schedule_coro(self._start_tasks(kws_to_watch, active_keys, params, interval), loop)
 
         labels = ", ".join(active_keys)
-        kw_info = f" — mots-clés: {', '.join(kws_to_watch)}" if any(kws_to_watch) else ""
+        kw_texts = [k["text"] for k in kws_to_watch]
+        kw_info = f" — mots-clés: {', '.join(kw_texts)}" if any(kw_texts) else ""
         self.on_log(f"▶️  Scan démarré ({labels}){kw_info} — interval {interval:.0f}s")
 
-    async def _start_tasks(self, kws_to_watch: list[str], active_keys: list[str], params: dict, interval: float) -> None:
-        for kw in kws_to_watch:
+    async def _start_tasks(self, kws_to_watch: list[dict], active_keys: list[str], params: dict, interval: float) -> None:
+        for kw_cfg in kws_to_watch:
+            kw = kw_cfg["text"] if isinstance(kw_cfg, dict) else kw_cfg
             if kw in self._tasks:
                 continue
-            kt = KeywordTask(keyword=kw, active_keys=list(active_keys), params=dict(params), interval=interval)
+            cfg_entry = kw_cfg if isinstance(kw_cfg, dict) else {}
+            kt = KeywordTask(keyword=kw, active_keys=list(active_keys), params=dict(params),
+                             interval=interval, kw_cfg=cfg_entry)
             kt.task = asyncio.create_task(self._keyword_loop(kt), name=f"scan-{kw or 'global'}")
             self._tasks[kw] = kt
 
@@ -467,24 +528,31 @@ class Scanner:
         if not self._running or not self._loop or self._loop.is_closed():
             return
         cfg = self.config_provider()
-        keywords = [k.strip() for k in cfg.get("keywords_filter", []) if k.strip()]
-        desired = set(keywords) if keywords else {""}
+        kw_cfgs = _parse_kw_list(cfg.get("keywords_filter", []))
+        desired_map = {k["text"]: k for k in kw_cfgs} if kw_cfgs else {"": {"text": "", "interval": None,
+                                                                              "max_price": None, "autobuy_enabled": None,
+                                                                              "autobuy_max_price": None,
+                                                                              "brand_ids": None, "size_ids": None}}
         active_keys = self._get_active_keys(cfg)
         params = self._build_base_params(cfg)
         interval = max(MIN_INTERVAL_SECONDS, float(cfg.get("interval_seconds", 10)))
-        self._schedule_coro(self._sync_tasks(desired, active_keys, params, interval))
+        self._schedule_coro(self._sync_tasks(desired_map, active_keys, params, interval))
 
-    async def _sync_tasks(self, desired: set[str], active_keys: list[str], params: dict, interval: float) -> None:
+    async def _sync_tasks(self, desired_map: dict[str, dict], active_keys: list[str], params: dict, interval: float) -> None:
         for kw in list(self._tasks.keys()):
-            if kw not in desired:
+            if kw not in desired_map:
                 kt = self._tasks.pop(kw)
                 if kt.task and not kt.task.done():
                     kt.task.cancel()
                 self.on_log(f"⏹️  [{kw or 'GLOBAL'}] Surveillance arrêtée")
-        new_kws = [kw for kw in desired if kw not in self._tasks]
+            else:
+                # Met à jour la config per-keyword à chaud si elle a changé
+                self._tasks[kw].kw_cfg = desired_map[kw]
+        new_kws = [cfg for text, cfg in desired_map.items() if text not in self._tasks]
         if new_kws:
             await self._start_tasks(new_kws, active_keys, params, interval)
-            self.on_log(f"▶️  Nouveau(x) mot(s)-clé(s) surveillé(s): {', '.join(new_kws)}")
+            new_texts = [k["text"] for k in new_kws]
+            self.on_log(f"▶️  Nouveau(x) mot(s)-clé(s) surveillé(s): {', '.join(new_texts)}")
 
     def stop(self) -> None:
         if not self._running:

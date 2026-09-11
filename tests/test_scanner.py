@@ -12,7 +12,7 @@ import asyncio
 import pytest
 
 import database.database as db
-from core.scanner import Scanner
+from core.scanner import Scanner, _parse_kw_list
 
 
 class StubScraper:
@@ -340,6 +340,74 @@ async def test_saturation_warning_logged(clean_db, monkeypatch):
 
     warning_logs = [l for l in logs if "annonces reçues étaient nouvelles" in l]
     assert len(warning_logs) >= 1
+
+
+# ── _parse_kw_list ───────────────────────────────────────────────────────────
+
+def test_parse_kw_list_strings():
+    """Strings simples → dicts avec text et champs None."""
+    result = _parse_kw_list(["nike", "jordan"])
+    assert len(result) == 2
+    assert result[0]["text"] == "nike"
+    assert result[0]["interval"] is None
+    assert result[0]["max_price"] is None
+    assert result[1]["text"] == "jordan"
+
+
+def test_parse_kw_list_dicts():
+    """Dicts complets préservés tel quel."""
+    raw = [{"text": "jordan 1", "interval": 3, "max_price": 150, "autobuy_enabled": True}]
+    result = _parse_kw_list(raw)
+    assert result[0]["text"] == "jordan 1"
+    assert result[0]["interval"] == 3
+    assert result[0]["max_price"] == 150
+    assert result[0]["autobuy_enabled"] is True
+
+
+def test_parse_kw_list_mixed():
+    """Mix string + dict → tous normalisés."""
+    raw = ["nike", {"text": "supreme", "interval": 5}]
+    result = _parse_kw_list(raw)
+    assert result[0]["text"] == "nike"
+    assert result[0]["interval"] is None
+    assert result[1]["text"] == "supreme"
+    assert result[1]["interval"] == 5
+
+
+def test_parse_kw_list_empty():
+    assert _parse_kw_list([]) == []
+
+
+# ── per-keyword interval ─────────────────────────────────────────────────────
+
+async def test_per_keyword_interval_overrides_global(clean_db, monkeypatch):
+    """La tâche d'un mot-clé utilise son propre intervalle quand défini."""
+    import core.scanner as scanner_mod
+    monkeypatch.setattr(scanner_mod, "MIN_INTERVAL_SECONDS", 0.01)
+
+    stub = StubScraper()
+    cfg = {
+        "keywords_filter": [{"text": "nike", "interval": 0.05}],
+        "markets": {"fr": {"enabled": True}},
+        "interval_seconds": 999,  # global très long — ne doit pas être utilisé
+        "warmup_first_run": False,
+        "custom_url": "",
+        "catalog_ids": [], "brand_ids": [], "min_price": None, "max_price": None,
+        "telegram": {"enabled": False}, "discord": {"enabled": False},
+    }
+    scanner = Scanner(
+        config_provider=lambda: cfg,
+        on_log=lambda m: None,
+        on_new_ad=lambda ad: None,
+        scrape_fn=stub,
+    )
+    scanner.start(asyncio.get_running_loop())
+    await asyncio.sleep(0.25)
+    scanner.stop()
+    await asyncio.sleep(0.05)
+
+    # Avec interval per-keyword=0.05s et warmup=False, on attend plusieurs cycles
+    assert len(stub.calls) >= 3
 
 
 def test_market_breakdown_hidden_for_single_market():

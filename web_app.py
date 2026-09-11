@@ -26,7 +26,7 @@ from core.scanner import Scanner
 from database import database as db
 from services import discord as discord_service
 from services import telegram as telegram_service
-from services.autobuy import run_autobuy, close_all as autobuy_close
+from services.autobuy import run_autobuy, prewarm as autobuy_prewarm, close_all as autobuy_close
 from utils.logger import setup_logging
 
 setup_logging(logging.INFO)
@@ -114,11 +114,19 @@ async def _on_new_ad(ad: dict) -> None:
     if not token:
         return
 
+    # Respect des réglages per-keyword (autobuy_enabled, autobuy_max_price)
+    kw_cfg = ad.get("_kw_cfg") or {}
+    if kw_cfg.get("autobuy_enabled") is False:
+        return
+    kw_max_price = kw_cfg.get("autobuy_max_price")
+    effective_max_price = kw_max_price if kw_max_price is not None else ab_cfg.get("max_price")
+
     result = await run_autobuy(
         ad=ad,
         token=token,
-        max_price=ab_cfg.get("max_price"),
+        max_price=effective_max_price,
         markets_info=config_data.get("markets", {}),
+        fast=True,
     )
     await manager.broadcast({"type": "autobuy_result", "result": result})
     icon = "✅" if result.get("success") else "❌"
@@ -150,6 +158,7 @@ async def lifespan(_app: FastAPI):
     asyncio.create_task(db.periodic_purge(6.0), name="db-purge")
     asyncio.create_task(scanner.telegram_retry_loop(120.0), name="telegram-retry")
     asyncio.create_task(_stats_broadcast_loop(), name="stats-broadcast")
+    asyncio.create_task(autobuy_prewarm(), name="autobuy-prewarm")
 
     logger.info("🛍️ Vinted Monitor Web — http://localhost:8080")
     yield

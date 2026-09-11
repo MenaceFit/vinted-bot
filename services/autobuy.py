@@ -1,10 +1,13 @@
 """
 Autobuy — achat automatique ultra-rapide sur Vinted.
 
-Flow :
-  1. check_available()  → GET /api/v2/items/{id}  (verfie can_buy + prix max)
-  2. attempt_buy()      → POST /api/v2/items/{id}/buy  (session Bearer)
-  3. Si échec → renvoie l'URL directe pour achat manuel immédiat
+Flow standard (fast=True, défaut) :
+  POST /api/v2/items/{id}/buy directement → résultat en ~150ms
+  409 Already sold → item parti, pas de retentative
+
+Flow conservateur (fast=False) :
+  1. check_available()  → GET /api/v2/items/{id}  (verif can_buy + prix)
+  2. attempt_buy()      → POST /api/v2/items/{id}/buy
 
 Sécurité :
   - Token jamais loggué en entier (masqué à 4 chars)
@@ -20,7 +23,8 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT_BUY = aiohttp.ClientTimeout(connect=4, sock_read=10)
+TIMEOUT_BUY = aiohttp.ClientTimeout(connect=3, sock_read=8)
+TIMEOUT_CHECK = aiohttp.ClientTimeout(connect=4, sock_read=10)
 _buy_sessions: dict[str, aiohttp.ClientSession] = {}
 
 
@@ -55,13 +59,20 @@ def _auth_headers(base_url: str, lang: str, token: str, csrf: Optional[str] = No
     return h
 
 
-def _get_buy_session(market_key: str) -> aiohttp.ClientSession:
+def _get_buy_session(market_key: str, timeout: Optional[aiohttp.ClientTimeout] = None) -> aiohttp.ClientSession:
     if market_key not in _buy_sessions or _buy_sessions[market_key].closed:
-        connector = aiohttp.TCPConnector(limit=5, force_close=False, enable_cleanup_closed=True)
+        connector = aiohttp.TCPConnector(limit=10, force_close=False, enable_cleanup_closed=True)
         _buy_sessions[market_key] = aiohttp.ClientSession(
-            connector=connector, timeout=TIMEOUT_BUY
+            connector=connector, timeout=timeout or TIMEOUT_BUY
         )
     return _buy_sessions[market_key]
+
+
+async def prewarm(market_keys: Optional[list[str]] = None) -> None:
+    """Pré-initialise les sessions HTTP pour éliminer la pénalité de cold-start."""
+    for key in (market_keys or ["fr", "buy", "check"]):
+        _get_buy_session(key)
+    logger.debug("[Autobuy] Sessions pré-chauffées")
 
 
 async def check_available(base_url: str, item_id: str, token: str, lang: str = "fr-FR,fr;q=0.9") -> tuple[bool, dict]:
@@ -177,14 +188,88 @@ async def attempt_buy(
         return {"success": False, "status": "exception", "order_id": "", "error": str(e)}
 
 
+async def fast_buy(
+    base_url: str,
+    item_id: str,
+    token: str,
+    lang: str = "fr-FR,fr;q=0.9",
+) -> dict:
+    """
+    Achat optimiste ultra-rapide — saute le GET check_available.
+
+    Économise 200-500ms par rapport au flow standard car on va directement
+    au POST buy. Le 409 (already sold) nous indique que l'article est parti.
+    Retourne le même format que attempt_buy().
+    """
+    session = _get_buy_session(f"fast_{item_id[:3]}")
+    headers = _auth_headers(base_url, lang, token)
+    body: dict = {"item_id": int(item_id)}
+
+    try:
+        async with session.post(
+            f"{base_url}/api/v2/items/{item_id}/buy",
+            headers=headers,
+            json=body,
+        ) as r:
+            resp_data = {}
+            try:
+                resp_data = await r.json(content_type=None)
+            except Exception:
+                pass
+
+            if r.status in (200, 201):
+                order_id = (
+                    resp_data.get("order", {}).get("id")
+                    or resp_data.get("id", "")
+                )
+                logger.info(f"[Autobuy] ✅ Fast buy réussi — item {item_id}, order {order_id}")
+                return {"success": True, "status": "purchased", "order_id": str(order_id), "error": ""}
+
+            if r.status == 401:
+                return {"success": False, "status": "token_invalid", "order_id": "", "error": "Token expiré ou invalide"}
+
+            if r.status == 409:
+                return {"success": False, "status": "already_sold", "order_id": "", "error": "Article déjà vendu"}
+
+            if r.status == 422:
+                err_msg = resp_data.get("error", {}).get("message", "") or resp_data.get("message", str(r.status))
+                return {"success": False, "status": "validation_error", "order_id": "", "error": err_msg}
+
+            # Fallback : essai endpoint transactions
+            body2 = {"item_id": int(item_id)}
+            async with session.post(
+                f"{base_url}/api/v2/transactions",
+                headers=headers,
+                json=body2,
+            ) as r2:
+                resp2 = {}
+                try:
+                    resp2 = await r2.json(content_type=None)
+                except Exception:
+                    pass
+                if r2.status in (200, 201):
+                    order_id = resp2.get("transaction", {}).get("id", "")
+                    return {"success": True, "status": "purchased", "order_id": str(order_id), "error": ""}
+                err = resp2.get("error", {}).get("message", "") or str(r2.status)
+                return {"success": False, "status": "api_error", "order_id": "", "error": err}
+
+    except asyncio.TimeoutError:
+        return {"success": False, "status": "timeout", "order_id": "", "error": "Timeout lors de l'achat"}
+    except Exception as e:
+        logger.error(f"[Autobuy] fast_buy exception: {e}")
+        return {"success": False, "status": "exception", "order_id": "", "error": str(e)}
+
+
 async def run_autobuy(
     ad: dict,
     token: str,
     max_price: Optional[float],
     markets_info: dict,
+    fast: bool = True,
 ) -> dict:
     """
-    Point d'entrée principal : vérifie disponibilité + tente l'achat.
+    Point d'entrée principal. fast=True (défaut) : achat direct sans pré-vérification.
+    fast=False : flow conservateur check_available → attempt_buy.
     Retourne le résultat complet à logger/broadcaster.
     """
     t0 = time.monotonic()
@@ -216,14 +301,18 @@ async def run_autobuy(
             return {**base_result, "success": False, "status": "price_exceeded",
                     "error": f"{price_num}€ > max {max_price}€"}
 
-    # 1. Vérifier disponibilité
+    if fast:
+        result = await fast_buy(base_url, item_id, token, lang)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return {**base_result, **result, "elapsed_ms": elapsed}
+
+    # Flow conservateur
     can_buy, item_data = await check_available(base_url, item_id, token, lang)
     if not can_buy:
         err = item_data.get("error", "indisponible")
         elapsed = int((time.monotonic() - t0) * 1000)
         return {**base_result, "success": False, "status": "unavailable", "error": err, "elapsed_ms": elapsed}
 
-    # 2. Tenter l'achat
     result = await attempt_buy(base_url, item_id, token, item_data, lang)
     elapsed = int((time.monotonic() - t0) * 1000)
     return {**base_result, **result, "elapsed_ms": elapsed}

@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import patch
 
 from services import autobuy as autobuy_mod
-from services.autobuy import check_available, attempt_buy, run_autobuy
+from services.autobuy import check_available, attempt_buy, run_autobuy, fast_buy
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -191,21 +191,23 @@ async def test_run_autobuy_price_exceeded():
 
 
 async def test_run_autobuy_item_unavailable():
+    """Flow conservateur (fast=False) : item not can_buy → unavailable."""
     session = FakeSession(FakeResponse(200, {"item": {"can_buy": False}}))
     ad = {"raw_id": "5", "market_key": "fr", "price_num": 30.0, "title": "Objet", "price": "30€", "url": ""}
     with _patch_session(session):
-        result = await run_autobuy(ad=ad, token="tok", max_price=None, markets_info={})
+        result = await run_autobuy(ad=ad, token="tok", max_price=None, markets_info={}, fast=False)
     assert result["success"] is False
     assert result["status"] == "unavailable"
 
 
 async def test_run_autobuy_full_success():
+    """Flow conservateur (fast=False) : check → buy → success."""
     check_resp = FakeResponse(200, {"item": {"can_buy": True, "title": "Nike Tech", "price": "80"}})
     buy_resp = FakeResponse(201, {"order": {"id": "ORD-1"}})
     session = FakeSession(check_resp, buy_resp)
     ad = {"raw_id": "42", "market_key": "fr", "price_num": 80.0, "title": "Nike Tech", "price": "80€", "url": "https://vinted.fr/items/42"}
     with _patch_session(session):
-        result = await run_autobuy(ad=ad, token="valid_token", max_price=100.0, markets_info={})
+        result = await run_autobuy(ad=ad, token="valid_token", max_price=100.0, markets_info={}, fast=False)
     assert result["success"] is True
     assert result["order_id"] == "ORD-1"
     assert result["elapsed_ms"] >= 0
@@ -218,5 +220,47 @@ async def test_run_autobuy_price_within_limit():
     session = FakeSession(check_resp, buy_resp)
     ad = {"raw_id": "7", "market_key": "fr", "price_num": 50.0, "title": "X", "price": "50€", "url": ""}
     with _patch_session(session):
-        result = await run_autobuy(ad=ad, token="tok", max_price=50.0, markets_info={})
+        result = await run_autobuy(ad=ad, token="tok", max_price=50.0, markets_info={}, fast=False)
     assert result["success"] is True
+
+
+# ── fast_buy ─────────────────────────────────────────────────────────────────
+
+async def test_fast_buy_success_201():
+    """fast_buy va directement au POST buy → 201 = achat réussi."""
+    session = FakeSession(FakeResponse(201, {"order": {"id": "FAST-1"}}))
+    with _patch_session(session):
+        result = await fast_buy("https://www.vinted.fr", "123", "tok")
+    assert result["success"] is True
+    assert result["status"] == "purchased"
+    assert result["order_id"] == "FAST-1"
+    assert session.calls == [("POST", "https://www.vinted.fr/api/v2/items/123/buy")]
+
+
+async def test_fast_buy_409_already_sold():
+    """fast_buy : 409 → already_sold (article parti entre-temps)."""
+    session = FakeSession(FakeResponse(409, {}))
+    with _patch_session(session):
+        result = await fast_buy("https://www.vinted.fr", "99", "tok")
+    assert result["success"] is False
+    assert result["status"] == "already_sold"
+
+
+async def test_fast_buy_401_token_invalid():
+    session = FakeSession(FakeResponse(401, {}))
+    with _patch_session(session):
+        result = await fast_buy("https://www.vinted.fr", "1", "bad")
+    assert result["success"] is False
+    assert result["status"] == "token_invalid"
+
+
+async def test_run_autobuy_fast_default_skips_check():
+    """run_autobuy fast=True (défaut) ne fait qu'un seul appel POST buy."""
+    session = FakeSession(FakeResponse(200, {"id": "ORD-FAST"}))
+    ad = {"raw_id": "10", "market_key": "fr", "price_num": 20.0, "title": "Test", "price": "20€", "url": ""}
+    with _patch_session(session):
+        result = await run_autobuy(ad=ad, token="tok", max_price=None, markets_info={})
+    assert result["success"] is True
+    # Un seul appel — pas de GET check_available
+    assert len(session.calls) == 1
+    assert session.calls[0][0] == "POST"
