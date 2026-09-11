@@ -542,7 +542,7 @@ function renderKeywords() {
     <div class="kw-pill" id="kw-${CSS.escape(kw)}">
       ${escHtml(kw)}
       <span class="kw-status" id="kws-${CSS.escape(kw)}"></span>
-      <button class="kw-remove" onclick="removeKeyword('${escHtml(kw)}')" title="Supprimer">×</button>
+      <button class="kw-remove" data-kw="${escHtml(kw)}" title="Supprimer">×</button>
     </div>
   `).join('');
 }
@@ -622,7 +622,7 @@ function buildAdCard(ad) {
         <span class="item-price">${escHtml(ad.price||'')}</span>
         ${kw}${mkt}${size}${brand}
         <a href="${escHtml(ad.url||'#')}" target="_blank" class="btn btn-ghost btn-sm" style="margin-left:auto">🔗 Voir</a>
-        ${config._has_token && (config.autobuy||{}).enabled ? `<button class="btn btn-primary btn-sm" onclick="manualBuy('${escHtml(ad.id||'')}','${escHtml(ad.url||'')}')">⚡ Buy</button>` : ''}
+        ${config._has_token && (config.autobuy||{}).enabled ? `<button class="btn btn-primary btn-sm btn-buy" data-url="${escHtml(ad.url||'')}">⚡ Buy</button>` : ''}
       </div>
     </div>
   </div>`;
@@ -702,15 +702,15 @@ function loadAutobuyUI() {
     : '<span style="color:var(--text2)">Aucun token</span>';
 }
 
-async function manualBuy(id, url) {
-  const m = url.match(/\/items\/(\d+)/);
-  if (!m) return;
-  appendLog('', `⚡ Autobuy manuel lancé pour ${url}`);
+async function manualBuy(url) {
+  if (!url) return;
+  appendLog('', `⚡ Achat manuel lancé…`);
   try {
-    const r = await fetch('/api/autobuy/test', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+    const r = await fetch('/api/autobuy/buy', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
     const d = await r.json();
-    appendLog('', `Disponible: ${d.can_buy} — ${d.title} (${d.price})`);
-  } catch(e) { appendLog('', `Erreur: ${e}`); }
+    handleAutobuyResult(d);
+    appendLog('', `${d.success ? '✅' : '❌'} ${escHtml(d.title||'')} — ${d.status}`);
+  } catch(e) { appendLog('', `Erreur achat: ${e}`); }
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -828,6 +828,17 @@ function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function setWsBadge(txt) { document.getElementById('ws-badge').textContent = txt; }
+
+// ── Delegated event listeners ─────────────────────────────────────────────────
+document.getElementById('kw-list').addEventListener('click', e => {
+  const btn = e.target.closest('.kw-remove');
+  if (btn) removeKeyword(btn.dataset.kw);
+});
+// Buy buttons appear in both feed and dashboard-feed
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.btn-buy');
+  if (btn) manualBuy(btn.dataset.url);
+});
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 connect();
