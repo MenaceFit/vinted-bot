@@ -573,5 +573,16 @@ def get_scraper_stats() -> dict:
     return {key: scraper.stats.copy() for key, scraper in _scrapers.items()}
 
 
+async def prewarm_scrapers(active_keys: Optional[list[str]] = None) -> None:
+    """Initialise les sessions des marchés actifs en parallèle au démarrage.
+    Élimine la pénalité de cold-start (~500ms) sur le premier scan."""
+    keys = active_keys or list(MARKETS.keys())
+    to_warm = [_scrapers[k] for k in keys if k in _scrapers and not _scrapers[k]._initialized]
+    if not to_warm:
+        return
+    await asyncio.gather(*[s._init_session() for s in to_warm], return_exceptions=True)
+    logger.info(f"[vinted] Sessions pré-chauffées: {[s.key for s in to_warm]}")
+
+
 async def close_all() -> None:
     await asyncio.gather(*(s.close() for s in _scrapers.values()), return_exceptions=True)

@@ -112,6 +112,17 @@ async def _async_mark_seen(ad_id: str, ts: float) -> None:
         logger.debug(f"[db] _async_mark_seen error: {e}")
 
 
+async def _async_mark_many_seen(entries: list[tuple[str, int]]) -> None:
+    """Persiste un lot d'IDs en une seule transaction (executemany + commit)."""
+    try:
+        await _db_conn.executemany(
+            "INSERT OR IGNORE INTO seen_ads (id, seen_at) VALUES (?, ?)", entries
+        )
+        await _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[db] _async_mark_many_seen error: {e}")
+
+
 def is_seen(ad_id: str) -> bool:
     """O(1) — pure mémoire, aucune I/O."""
     return ad_id in _cache
@@ -139,13 +150,17 @@ def filter_new(ads: list[dict]) -> list[dict]:
 
 
 def mark_all_seen(ads: list[dict]) -> None:
-    """Warmup — marque tout en mémoire + SQLite en arrière-plan."""
+    """Warmup — marque tout en mémoire + SQLite en arrière-plan (batch)."""
     now = time.time()
+    ts_int = int(now)
+    entries: list[tuple[str, int]] = []
     for ad in ads:
         aid = str(ad.get("id", ""))
         if aid:
             _cache[aid] = now
-            _spawn(_async_mark_seen(aid, now))
+            entries.append((aid, ts_int))
+    if entries:
+        _spawn(_async_mark_many_seen(entries))
 
 
 def reset_all() -> None:

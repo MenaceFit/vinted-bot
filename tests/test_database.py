@@ -111,6 +111,31 @@ async def test_reset_all_clears_dedup_and_listings(fresh_db):
     assert rows == []
 
 
+async def test_mark_all_seen_batch(fresh_db):
+    """mark_all_seen doit persister plusieurs IDs en une seule transaction."""
+    ads = [{"id": f"warm_{i}"} for i in range(5)]
+    db.mark_all_seen(ads)
+    await asyncio.sleep(0.05)
+
+    # Tous doivent être en cache mémoire
+    for i in range(5):
+        assert db.is_seen(f"warm_{i}")
+
+    # Aucun ne doit ressortir comme nouveau
+    new = db.filter_new(ads)
+    assert new == []
+
+    # Persistés en SQLite (doivent survivre au rechargement)
+    counts_before = db.get_stats()["total_mem"]
+    assert counts_before >= 5
+
+
+async def test_mark_all_seen_empty_list(fresh_db):
+    """mark_all_seen avec une liste vide ne doit pas planter."""
+    db.mark_all_seen([])  # pas d'exception
+    assert db.get_stats()["total_mem"] == 0
+
+
 async def test_reset_all_resets_listing_count(fresh_db):
     """Bug: reset_all() ne remettait pas _listing_count à zéro → get_stats() restait faux."""
     ads = [

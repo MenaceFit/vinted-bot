@@ -70,10 +70,13 @@ class PerformanceMonitor:
                 "errors": self.total_errors, "retries": self.total_retries,
                 "api_ms": 0.0, "parse_ms": 0.0, "process_ms": 0.0, "total_ms": 0.0,
                 "latency_min_ms": 0.0, "latency_max_ms": 0.0, "latency_avg_ms": 0.0,
+                "latency_p50_ms": 0.0, "latency_p95_ms": 0.0,
+                "sparkline": [],
                 "uptime_s": time.time() - self.start_time,
             }
 
         totals = [s.total_ms for s in samples]
+        sparkline = [round(s.total_ms, 1) for s in samples[-20:]]
         return {
             "scans": len(samples),
             "requests": self.total_requests,
@@ -86,6 +89,9 @@ class PerformanceMonitor:
             "latency_min_ms": min(totals),
             "latency_max_ms": max(totals),
             "latency_avg_ms": _avg(totals),
+            "latency_p50_ms": _percentile(totals, 50),
+            "latency_p95_ms": _percentile(totals, 95),
+            "sparkline": sparkline,
             "uptime_s": time.time() - self.start_time,
         }
 
@@ -100,3 +106,11 @@ class PerformanceMonitor:
 def _avg(values) -> float:
     values = list(values)
     return sum(values) / len(values) if values else 0.0
+
+
+def _percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = max(0, min(int(len(s) * p / 100), len(s) - 1))
+    return s[idx]

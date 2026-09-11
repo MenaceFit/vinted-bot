@@ -27,6 +27,7 @@ from database import database as db
 from services import discord as discord_service
 from services import telegram as telegram_service
 from services.autobuy import run_autobuy, prewarm as autobuy_prewarm, close_all as autobuy_close
+from services.vinted import prewarm_scrapers as vinted_prewarm
 from utils.logger import setup_logging
 
 setup_logging(logging.INFO)
@@ -159,6 +160,7 @@ async def lifespan(_app: FastAPI):
     asyncio.create_task(scanner.telegram_retry_loop(120.0), name="telegram-retry")
     asyncio.create_task(_stats_broadcast_loop(), name="stats-broadcast")
     asyncio.create_task(autobuy_prewarm(), name="autobuy-prewarm")
+    asyncio.create_task(vinted_prewarm(), name="vinted-prewarm")
 
     logger.info("🛍️ Vinted Monitor Web — http://localhost:8080")
     yield

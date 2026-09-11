@@ -216,6 +216,10 @@ input:checked + .slider:before { transform: translateX(16px); }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* ── Sparkline ── */
+.sparkline { display: block; }
+.sparkline line { stroke: var(--accent2); stroke-width: 1.5; stroke-linecap: round; }
 </style>
 </head>
 <body>
@@ -248,8 +252,13 @@ input:checked + .slider:before { transform: translateX(16px); }
           <div class="stat green"><div class="stat-val" id="st-new">0</div><div class="stat-label">Nouvelles annonces</div></div>
           <div class="stat orange"><div class="stat-val" id="st-ab">0</div><div class="stat-label">Autobuy tentés</div></div>
           <div class="stat green"><div class="stat-val" id="st-ab-ok">0</div><div class="stat-label">Autobuy réussis</div></div>
-          <div class="stat"><div class="stat-val" id="st-ms">—</div><div class="stat-label">ms/scan</div></div>
+          <div class="stat"><div class="stat-val" id="st-ms">—</div><div class="stat-label">ms/scan avg</div></div>
+          <div class="stat"><div class="stat-val" id="st-p95">—</div><div class="stat-label">ms/scan P95</div></div>
           <div class="stat"><div class="stat-val" id="st-db">0</div><div class="stat-label">En base</div></div>
+        </div>
+        <div class="card" style="margin-bottom:16px;padding:14px 18px">
+          <div class="card-title" style="margin-bottom:8px">Latence scan (20 derniers)</div>
+          <svg id="sparkline-svg" class="sparkline" width="100%" height="40" viewBox="0 0 200 40" preserveAspectRatio="none"></svg>
         </div>
         <div class="card">
           <div class="card-title">Activité récente</div>
@@ -287,8 +296,11 @@ input:checked + .slider:before { transform: translateX(16px); }
       <div class="page" id="page-feed">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
           <div style="font-weight:700;font-size:18px">Annonces détectées</div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-ghost btn-sm" onclick="clearFeed()">Vider</button>
+            <select id="filter-keyword" onchange="applyFilter()" style="width:auto;padding:6px 10px">
+              <option value="">Tous les mots-clés</option>
+            </select>
             <select id="filter-market" onchange="applyFilter()" style="width:auto;padding:6px 10px">
               <option value="">Tous les marchés</option>
               <option value="fr">🇫🇷 France</option>
@@ -649,13 +661,12 @@ function addAdToFeed(ad, isNew) {
     dashEl.insertAdjacentHTML('afterbegin', buildAdCard(ad));
     if (dashEl.children.length > 10) dashEl.lastElementChild.remove();
 
-    // Badge notification if not on feed page
-    if (document.getElementById('page-feed').style.display !== 'block' ||
-        !document.getElementById('page-feed').classList.contains('active')) {
+    if (!document.getElementById('page-feed').classList.contains('active')) {
       feedBadge++;
       const badge = document.getElementById('feed-count-badge');
       badge.textContent = feedBadge > 99 ? '99+' : feedBadge;
       badge.style.display = 'inline';
+      document.title = `(${feedBadge}) Vinted Monitor`;
     }
   }
 }
@@ -670,7 +681,8 @@ function buildAdCard(ad) {
   const size = ad.size ? `<span class="badge badge-gray">${escHtml(ad.size)}</span>` : '';
   const brand = ad.brand ? `<span class="badge badge-gray">${escHtml(ad.brand)}</span>` : '';
 
-  return `<div class="item-card" data-market="${ad.market_key||''}">
+  if (ad.keyword) _addKwToFilter(ad.keyword);
+  return `<div class="item-card" data-market="${ad.market_key||''}" data-keyword="${escHtml(ad.keyword||'')}">
     ${img}
     <div class="item-body">
       <div class="item-title" title="${escHtml(ad.title||'')}">${escHtml(ad.title||'Sans titre')}</div>
@@ -685,13 +697,30 @@ function buildAdCard(ad) {
   </div>`;
 }
 
-function clearFeed() { ads = []; document.getElementById('items-feed').innerHTML = '<div class="empty"><div class="empty-icon">📦</div>Aucune annonce détectée</div>'; }
+function clearFeed() {
+  ads = [];
+  document.getElementById('items-feed').innerHTML = '<div class="empty"><div class="empty-icon">📦</div>Aucune annonce détectée</div>';
+  document.getElementById('filter-keyword').innerHTML = '<option value="">Tous les mots-clés</option>';
+}
 
 function applyFilter() {
   const market = document.getElementById('filter-market').value;
+  const kw = document.getElementById('filter-keyword').value;
   document.querySelectorAll('#items-feed .item-card').forEach(card => {
-    card.style.display = (!market || card.dataset.market === market) ? '' : 'none';
+    const mktOk = !market || card.dataset.market === market;
+    const kwOk = !kw || card.dataset.keyword === kw;
+    card.style.display = (mktOk && kwOk) ? '' : 'none';
   });
+}
+
+function _addKwToFilter(kw) {
+  if (!kw) return;
+  const sel = document.getElementById('filter-keyword');
+  if (sel.querySelector(`option[value="${CSS.escape(kw)}"]`)) return;
+  const opt = document.createElement('option');
+  opt.value = kw;
+  opt.textContent = kw;
+  sel.appendChild(opt);
 }
 
 // ── Autobuy ───────────────────────────────────────────────────────────────────
@@ -778,9 +807,28 @@ function updateStats(msg) {
   document.getElementById('st-scans').textContent = sc.total_scans ?? '—';
   document.getElementById('st-new').textContent = sc.total_new_ads ?? '—';
   document.getElementById('st-ms').textContent = p.total_ms ? Math.round(p.total_ms) : '—';
+  document.getElementById('st-p95').textContent = p.latency_p95_ms ? Math.round(p.latency_p95_ms) : '—';
   document.getElementById('st-db').textContent = db.total_listings ?? '—';
-  document.getElementById('perf-label').textContent = p.total_ms ? `⚡ ${Math.round(p.total_ms)}ms/scan` : '⚡ —';
+  document.getElementById('perf-label').textContent = p.total_ms ? `⚡ ${Math.round(p.total_ms)}ms | P95 ${Math.round(p.latency_p95_ms||0)}ms` : '⚡ —';
   updateTasksUI(sc.keywords || {});
+  if (p.sparkline && p.sparkline.length > 1) drawSparkline(p.sparkline);
+}
+
+function drawSparkline(data) {
+  const svg = document.getElementById('sparkline-svg');
+  if (!svg) return;
+  const W = 200, H = 40, pad = 3;
+  const min = Math.min(...data), max = Math.max(...data);
+  const range = max - min || 1;
+  const pts = data.map((v, i) => [
+    pad + (i / (data.length - 1)) * (W - 2 * pad),
+    H - pad - ((v - min) / range) * (H - 2 * pad)
+  ]);
+  let d = '';
+  for (let i = 1; i < pts.length; i++) {
+    d += `<line x1="${pts[i-1][0].toFixed(1)}" y1="${pts[i-1][1].toFixed(1)}" x2="${pts[i][0].toFixed(1)}" y2="${pts[i][1].toFixed(1)}"/>`;
+  }
+  svg.innerHTML = d;
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -877,7 +925,11 @@ function showPage(id) {
   if (page) page.classList.add('active');
   const nav = document.getElementById(`nav-${id}`);
   if (nav) nav.classList.add('active');
-  if (id === 'feed') { feedBadge = 0; document.getElementById('feed-count-badge').style.display = 'none'; }
+  if (id === 'feed') {
+    feedBadge = 0;
+    document.getElementById('feed-count-badge').style.display = 'none';
+    document.title = 'Vinted Monitor';
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -943,6 +995,14 @@ document.getElementById('kw-list').addEventListener('click', e => {
 document.addEventListener('click', e => {
   const btn = e.target.closest('.btn-buy');
   if (btn) manualBuy(btn.dataset.url);
+});
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) {
+    e.preventDefault();
+    toggleScanner();
+  }
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
