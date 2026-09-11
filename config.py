@@ -26,7 +26,7 @@ MARKET_DEFAULTS = {
     "uk": {"label": "🇬🇧 Angleterre", "base_url": "https://www.vinted.co.uk"},
 }
 
-SECRET_KEYS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DISCORD_WEBHOOK_URL")
+SECRET_KEYS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DISCORD_WEBHOOK_URL", "VINTED_TOKEN")
 
 
 def load_env() -> None:
@@ -98,6 +98,10 @@ def _default_config() -> dict:
         },
         "discord": {
             "enabled": False,
+        },
+        "autobuy": {
+            "enabled": False,
+            "max_price": None,
         },
     }
 

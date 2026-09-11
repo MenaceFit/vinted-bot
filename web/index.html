@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vinted Monitor</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --panel: #1a1d27;
+  --panel2: #222638;
+  --border: #2e3248;
+  --accent: #7c6ef5;
+  --accent2: #9d8ff7;
+  --green: #22c55e;
+  --red: #ef4444;
+  --orange: #f59e0b;
+  --text: #e8eaf6;
+  --text2: #8890b0;
+  --sidebar-w: 220px;
+  --radius: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+a { color: var(--accent2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Layout ── */
+#app { display: flex; height: 100vh; overflow: hidden; }
+#sidebar {
+  width: var(--sidebar-w); flex-shrink: 0;
+  background: var(--panel); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 0;
+}
+#main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#content { flex: 1; overflow-y: auto; padding: 20px; }
+#logbar {
+  border-top: 1px solid var(--border); background: var(--panel);
+  height: 140px; display: flex; flex-direction: column;
+}
+#logbar-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; }
+#logbar-header span { font-size: 12px; color: var(--text2); font-weight: 600; }
+#logs {
+  flex: 1; overflow-y: auto; padding: 4px 14px 8px;
+  font-family: 'Cascadia Code', 'Fira Mono', monospace; font-size: 12px;
+  color: var(--text2); line-height: 1.6;
+}
+#logs .log-ts { color: var(--accent); margin-right: 6px; }
+
+/* ── Sidebar ── */
+.brand {
+  padding: 20px 18px 16px;
+  font-weight: 800; font-size: 16px; letter-spacing: 0.5px;
+  color: var(--accent2);
+  border-bottom: 1px solid var(--border);
+}
+.brand small { display: block; font-weight: 400; font-size: 11px; color: var(--text2); margin-top: 2px; }
+nav { flex: 1; padding: 10px 8px; }
+.nav-btn {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px;
+  border: none; border-radius: 8px; background: transparent; color: var(--text2);
+  font-size: 13.5px; font-weight: 500; cursor: pointer; text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+.nav-btn:hover { background: var(--panel2); color: var(--text); }
+.nav-btn.active { background: var(--panel2); color: var(--accent2); }
+.nav-btn .icon { font-size: 16px; width: 20px; }
+.sidebar-footer { padding: 14px 18px; border-top: 1px solid var(--border); }
+#status-dot { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+#perf-label { font-size: 11px; color: var(--text2); }
+#ws-badge { font-size: 11px; margin-top: 4px; }
+
+/* ── Pages ── */
+.page { display: none; }
+.page.active { display: block; }
+
+/* ── Cards / Panels ── */
+.card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px;
+}
+.card-title { font-size: 13px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 14px; }
+.row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.col { flex: 1; min-width: 200px; }
+
+/* ── Stat tiles ── */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.stat {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+}
+.stat-val { font-size: 28px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
+.stat-label { font-size: 12px; color: var(--text2); }
+.stat.green .stat-val { color: var(--green); }
+.stat.purple .stat-val { color: var(--accent2); }
+.stat.orange .stat-val { color: var(--orange); }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px;
+  border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.btn:active { transform: scale(0.97); }
+.btn:hover { opacity: 0.9; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-success { background: var(--green); color: #fff; }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+.btn-icon { padding: 8px 10px; }
+
+/* ── Scanner controls ── */
+#scanner-controls { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+#toggle-btn { min-width: 140px; font-size: 14px; }
+
+/* ── Keyword pills ── */
+#kw-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.kw-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 12px; font-size: 13px;
+}
+.kw-pill .kw-status { font-size: 11px; }
+.kw-remove { background: none; border: none; cursor: pointer; color: var(--text2); font-size: 16px; line-height: 1; padding: 0; }
+.kw-remove:hover { color: var(--red); }
+
+/* ── Items feed ── */
+#items-feed { display: flex; flex-direction: column; gap: 10px; }
+.item-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); display: flex; gap: 14px; padding: 12px;
+  animation: slideIn 0.25s ease;
+}
+@keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+.item-img {
+  width: 72px; height: 72px; object-fit: cover;
+  border-radius: 8px; flex-shrink: 0; background: var(--panel2);
+}
+.item-img-placeholder { width: 72px; height: 72px; border-radius: 8px; background: var(--panel2); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.item-body { flex: 1; min-width: 0; }
+.item-title { font-weight: 600; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-meta { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+.item-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.item-price { font-weight: 800; font-size: 16px; color: var(--green); }
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+}
+.badge-purple { background: #3d2fa0; color: var(--accent2); }
+.badge-green { background: #14532d; color: var(--green); }
+.badge-red { background: #450a0a; color: var(--red); }
+.badge-orange { background: #431407; color: var(--orange); }
+.badge-gray { background: var(--panel2); color: var(--text2); }
+
+/* ── Autobuy result card ── */
+.ab-card {
+  background: var(--panel2); border-radius: 8px; padding: 10px 14px;
+  margin-bottom: 8px; border-left: 3px solid var(--accent);
+  font-size: 13px;
+}
+.ab-card.success { border-left-color: var(--green); }
+.ab-card.failed { border-left-color: var(--red); }
+
+/* ── Forms ── */
+label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+input[type="text"], input[type="number"], input[type="password"], select, textarea {
+  width: 100%; padding: 9px 12px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 13px; outline: none;
+  transition: border-color 0.15s;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+.form-row { margin-bottom: 14px; }
+.form-row-inline { display: flex; gap: 12px; align-items: flex-end; }
+.form-row-inline .form-row { flex: 1; margin-bottom: 0; }
+.form-hint { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.toggle-label { font-size: 13px; }
+.toggle-sub { font-size: 11px; color: var(--text2); }
+
+/* ── Toggle switch ── */
+.switch { position: relative; display: inline-block; width: 38px; height: 22px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; inset: 0; background: var(--border); border-radius: 22px; cursor: pointer; transition: background 0.2s; }
+.slider:before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: transform 0.2s; }
+input:checked + .slider { background: var(--accent); }
+input:checked + .slider:before { transform: translateX(16px); }
+
+/* ── Market checkboxes ── */
+.market-grid { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.market-btn {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel2);
+  cursor: pointer; font-size: 13px; color: var(--text2);
+  transition: border-color 0.15s, color 0.15s;
+}
+.market-btn input { display: none; }
+.market-btn.on { border-color: var(--accent); color: var(--accent2); }
+
+/* ── Autobuy page ── */
+.ab-section { margin-bottom: 20px; }
+.ab-token-row { display: flex; gap: 10px; align-items: flex-end; }
+.ab-token-row .form-row { flex: 1; margin-bottom: 0; }
+#token-status { font-size: 12px; margin-top: 6px; }
+
+/* ── Empty state ── */
+.empty { text-align: center; padding: 60px 20px; color: var(--text2); }
+.empty-icon { font-size: 48px; margin-bottom: 12px; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- ── Sidebar ── -->
+  <div id="sidebar">
+    <div class="brand">🛍️ Vinted Monitor <small>Web Edition</small></div>
+    <nav>
+      <button class="nav-btn active" onclick="showPage('dashboard')" id="nav-dashboard"><span class="icon">🏠</span> Dashboard</button>
+      <button class="nav-btn" onclick="showPage('scanner')" id="nav-scanner"><span class="icon">🔎</span> Scanner</button>
+      <button class="nav-btn" onclick="showPage('feed')" id="nav-feed"><span class="icon">📦</span> Annonces <span id="feed-count-badge" style="margin-left:auto;background:var(--accent);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;display:none"></span></button>
+      <button class="nav-btn" onclick="showPage('autobuy')" id="nav-autobuy"><span class="icon">⚡</span> Autobuy</button>
+      <button class="nav-btn" onclick="showPage('settings')" id="nav-settings"><span class="icon">⚙️</span> Paramètres</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="status-dot">🔴 ARRÊTÉ</div>
+      <div id="perf-label">⚡ —</div>
+      <div id="ws-badge">🔌 Connexion...</div>
+    </div>
+  </div>
+
+  <!-- ── Main ── -->
+  <div id="main">
+    <div id="content">
+
+      <!-- DASHBOARD -->
+      <div class="page active" id="page-dashboard">
+        <div class="stat-grid" id="stat-grid">
+          <div class="stat purple"><div class="stat-val" id="st-scans">0</div><div class="stat-label">Scans total</div></div>
+          <div class="stat green"><div class="stat-val" id="st-new">0</div><div class="stat-label">Nouvelles annonces</div></div>
+          <div class="stat orange"><div class="stat-val" id="st-ab">0</div><div class="stat-label">Autobuy tentés</div></div>
+          <div class="stat green"><div class="stat-val" id="st-ab-ok">0</div><div class="stat-label">Autobuy réussis</div></div>
+          <div class="stat"><div class="stat-val" id="st-ms">—</div><div class="stat-label">ms/scan</div></div>
+          <div class="stat"><div class="stat-val" id="st-db">0</div><div class="stat-label">En base</div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Activité récente</div>
+          <div id="dashboard-feed" style="display:flex;flex-direction:column;gap:8px;">
+            <div class="empty"><div class="empty-icon">🔍</div>Démarrez le scanner pour voir les annonces</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SCANNER -->
+      <div class="page" id="page-scanner">
+        <div id="scanner-controls">
+          <button class="btn btn-success" id="toggle-btn" onclick="toggleScanner()">▶ Démarrer</button>
+          <button class="btn btn-ghost" onclick="scanOnce()">🔎 Scan unique</button>
+        </div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-title">Mots-clés surveillés</div>
+          <div class="form-row-inline">
+            <div class="form-row" style="flex:1;margin-bottom:0">
+              <input type="text" id="kw-input" placeholder="Air Jordan 1, Nike SB..." onkeydown="if(event.key==='Enter')addKeyword()">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="addKeyword()">+ Ajouter</button>
+          </div>
+          <div id="kw-list" style="margin-top:12px"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Statut des tâches</div>
+          <div id="tasks-status">
+            <div style="color:var(--text2);font-size:13px">Aucune tâche active</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FEED -->
+      <div class="page" id="page-feed">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div style="font-weight:700;font-size:18px">Annonces détectées</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="clearFeed()">Vider</button>
+            <select id="filter-market" onchange="applyFilter()" style="width:auto;padding:6px 10px">
+              <option value="">Tous les marchés</option>
+              <option value="fr">🇫🇷 France</option>
+              <option value="pl">🇵🇱 Pologne</option>
+              <option value="uk">🇬🇧 UK</option>
+            </select>
+          </div>
+        </div>
+        <div id="items-feed">
+          <div class="empty"><div class="empty-icon">📦</div>Aucune annonce détectée</div>
+        </div>
+      </div>
+
+      <!-- AUTOBUY -->
+      <div class="page" id="page-autobuy">
+        <div class="card ab-section">
+          <div class="card-title">⚡ Configuration Autobuy</div>
+          <div class="toggle-row">
+            <div><div class="toggle-label">Activer l'autobuy</div><div class="toggle-sub">Achète automatiquement les nouvelles annonces correspondantes</div></div>
+            <label class="switch"><input type="checkbox" id="ab-enabled" onchange="saveAutobuyConfig()"><span class="slider"></span></label>
+          </div>
+          <div style="height:16px"></div>
+          <div class="form-row">
+            <label>Prix maximum (€)</label>
+            <input type="number" id="ab-max-price" placeholder="Ex: 150" min="0" onchange="saveAutobuyConfig()">
+            <div class="form-hint">Laisse vide pour ignorer le filtre prix</div>
+          </div>
+          <div style="height:8px"></div>
+          <div class="form-row">
+            <label>Token Vinted (access_token_web)</label>
+            <div class="ab-token-row">
+              <div class="form-row"><input type="password" id="ab-token" placeholder="Colle ton token ici..." autocomplete="off"></div>
+              <button class="btn btn-primary btn-sm" onclick="saveToken()">💾 Sauvegarder</button>
+            </div>
+            <div id="token-status"></div>
+            <div class="form-hint">Obtiens ton token depuis les cookies Vinted (access_token_web). Il reste local, jamais envoyé ailleurs.</div>
+          </div>
+          <div style="height:8px"></div>
+          <button class="btn btn-ghost btn-sm" onclick="showPage('test-ab-modal')">🧪 Tester un article</button>
+        </div>
+
+        <div class="card ab-section">
+          <div class="card-title">Comment obtenir le token Vinted</div>
+          <ol style="line-height:2;color:var(--text2);font-size:13px;padding-left:20px">
+            <li>Ouvre <a href="https://www.vinted.fr" target="_blank">vinted.fr</a> dans ton navigateur et connecte-toi</li>
+            <li>Appuie sur <strong>F12</strong> → onglet <strong>Application</strong> (Chrome) ou <strong>Stockage</strong> (Firefox)</li>
+            <li>Va dans <strong>Cookies → https://www.vinted.fr</strong></li>
+            <li>Copie la valeur du cookie <strong>access_token_web</strong></li>
+            <li>Colle-la dans le champ ci-dessus</li>
+          </ol>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Activité Autobuy</div>
+          <div id="ab-activity">
+            <div class="empty"><div class="empty-icon">⚡</div>Aucune tentative d'autobuy</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="page" id="page-settings">
+        <div class="row">
+          <div class="col">
+            <div class="card">
+              <div class="card-title">Scanner</div>
+              <div class="form-row">
+                <label>Intervalle de scan (secondes)</label>
+                <input type="number" id="s-interval" min="3" max="60" value="8">
+                <div class="form-hint">Minimum 3s recommandé</div>
+              </div>
+              <div class="form-row">
+                <label>Prix minimum (€)</label>
+                <input type="number" id="s-min-price" placeholder="Pas de minimum" min="0">
+              </div>
+              <div class="form-row">
+                <label>Prix maximum (€)</label>
+                <input type="number" id="s-max-price" placeholder="Pas de maximum" min="0">
+              </div>
+              <div class="form-row">
+                <label>URL Vinted personnalisée</label>
+                <input type="text" id="s-custom-url" placeholder="https://www.vinted.fr/catalog?...">
+                <div class="form-hint">Colle une URL de recherche Vinted pour importer ses filtres</div>
+              </div>
+            </div>
+          </div>
+          <div class="col">
+            <div class="card" style="margin-bottom:16px">
+              <div class="card-title">Marchés actifs</div>
+              <div class="market-grid">
+                <label class="market-btn" id="mkt-fr"><input type="checkbox" value="fr" onchange="saveSettings()"> 🇫🇷 France</label>
+                <label class="market-btn" id="mkt-pl"><input type="checkbox" value="pl" onchange="saveSettings()"> 🇵🇱 Pologne</label>
+                <label class="market-btn" id="mkt-uk"><input type="checkbox" value="uk" onchange="saveSettings()"> 🇬🇧 UK</label>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">Notifications</div>
+              <div class="toggle-row">
+                <div><div class="toggle-label">Telegram</div></div>
+                <label class="switch"><input type="checkbox" id="s-tg-enabled" onchange="saveSettings()"><span class="slider"></span></label>
+              </div>
+              <div class="form-row" style="margin-top:12px">
+                <label>Bot Token</label>
+                <input type="password" id="s-tg-token" placeholder="123456:ABC...">
+              </div>
+              <div class="form-row">
+                <label>Chat ID</label>
+                <input type="text" id="s-tg-chat" placeholder="-100...">
+              </div>
+              <div class="toggle-row" style="margin-top:8px">
+                <div><div class="toggle-label">Discord</div></div>
+                <label class="switch"><input type="checkbox" id="s-dc-enabled" onchange="saveSettings()"><span class="slider"></span></label>
+              </div>
+              <div class="form-row" style="margin-top:12px">
+                <label>Webhook URL</label>
+                <input type="password" id="s-dc-webhook" placeholder="https://discord.com/api/webhooks/...">
+              </div>
+              <button class="btn btn-primary" style="margin-top:8px;width:100%" onclick="saveSettings()">💾 Sauvegarder</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+
+    <!-- Log bar -->
+    <div id="logbar">
+      <div id="logbar-header">
+        <span>📋 Logs temps réel</span>
+        <button class="btn btn-ghost btn-sm" onclick="clearLogs()">Vider</button>
+      </div>
+      <div id="logs"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let ws = null;
+let running = false;
+let config = {};
+let ads = [];
+let abAttempts = 0, abSuccess = 0;
+let feedBadge = 0;
+const MAX_ADS = 500;
+const dashAds = [];
+
+// ── WebSocket ────────────────────────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    setWsBadge('🟢 Connecté');
+    ws.send(JSON.stringify({cmd: 'get_state'}));
+  };
+  ws.onclose = () => {
+    setWsBadge('🔴 Déconnecté');
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = () => setWsBadge('⚠️ Erreur WS');
+  ws.onmessage = ({data}) => {
+    try { handleMsg(JSON.parse(data)); } catch(e) {}
+  };
+}
+
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+function handleMsg(msg) {
+  switch(msg.type) {
+    case 'init':
+      config = msg.config || {};
+      loadConfigUI();
+      (msg.ads || []).reverse().forEach(ad => addAdToFeed(ad, false));
+      break;
+    case 'state':
+      running = msg.running;
+      config = msg.config || config;
+      updateRunningUI();
+      loadConfigUI();
+      updateTasksUI(msg.stats?.keywords || {});
+      break;
+    case 'new_ad':
+      addAdToFeed(msg.ad, true);
+      break;
+    case 'autobuy_result':
+      handleAutobuyResult(msg.result);
+      break;
+    case 'log':
+      appendLog(msg.ts || '', msg.msg || '');
+      break;
+    case 'stats':
+      updateStats(msg);
+      break;
+    case 'scanner_state':
+      running = msg.running;
+      updateRunningUI();
+      break;
+    case 'keyword_status':
+      updateKeywordPill(msg.keyword, msg.status);
+      break;
+    case 'config_updated':
+      config = msg.config || config;
+      break;
+  }
+}
+
+// ── Scanner controls ─────────────────────────────────────────────────────────
+function toggleScanner() {
+  send({cmd: running ? 'scanner_stop' : 'scanner_start'});
+}
+function scanOnce() { send({cmd: 'scanner_once'}); appendLog('', '🔎 Scan unique lancé...'); }
+
+function updateRunningUI() {
+  const btn = document.getElementById('toggle-btn');
+  const dot = document.getElementById('status-dot');
+  if (running) {
+    btn.textContent = '⏹ Arrêter';
+    btn.className = 'btn btn-danger';
+    dot.textContent = '🟢 ACTIF';
+    dot.style.color = 'var(--green)';
+  } else {
+    btn.textContent = '▶ Démarrer';
+    btn.className = 'btn btn-success';
+    dot.textContent = '🔴 ARRÊTÉ';
+    dot.style.color = 'var(--red)';
+  }
+}
+
+// ── Keywords ─────────────────────────────────────────────────────────────────
+function addKeyword() {
+  const input = document.getElementById('kw-input');
+  const kw = input.value.trim();
+  if (!kw) return;
+  if (!config.keywords_filter) config.keywords_filter = [];
+  if (config.keywords_filter.includes(kw)) return;
+  config.keywords_filter.push(kw);
+  input.value = '';
+  renderKeywords();
+  patchConfig({keywords_filter: config.keywords_filter});
+}
+
+function removeKeyword(kw) {
+  config.keywords_filter = (config.keywords_filter || []).filter(k => k !== kw);
+  renderKeywords();
+  patchConfig({keywords_filter: config.keywords_filter});
+}
+
+function renderKeywords() {
+  const el = document.getElementById('kw-list');
+  const kws = config.keywords_filter || [];
+  if (!kws.length) { el.innerHTML = '<span style="color:var(--text2);font-size:12px">Aucun mot-clé — surveillance globale</span>'; return; }
+  el.innerHTML = kws.map(kw => `
+    <div class="kw-pill" id="kw-${CSS.escape(kw)}">
+      ${escHtml(kw)}
+      <span class="kw-status" id="kws-${CSS.escape(kw)}"></span>
+      <button class="kw-remove" onclick="removeKeyword('${escHtml(kw)}')" title="Supprimer">×</button>
+    </div>
+  `).join('');
+}
+
+function updateKeywordPill(kw, status) {
+  const el = document.getElementById(`kws-${CSS.escape(kw)}`);
+  if (!el) return;
+  const icons = {scanning: '🟢', error: '🔴', starting: '🟡', stopped: '⚫'};
+  el.textContent = icons[status.status] || '';
+}
+
+function updateTasksUI(keywords) {
+  const el = document.getElementById('tasks-status');
+  const entries = Object.entries(keywords);
+  if (!entries.length) { el.innerHTML = '<div style="color:var(--text2);font-size:13px">Aucune tâche active</div>'; return; }
+  el.innerHTML = entries.map(([kw, s]) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:16px">${{scanning:'🟢',error:'🔴',starting:'🟡',stopped:'⚫'}[s.status]||'⚪'}</span>
+      <div style="flex:1">
+        <div style="font-weight:600">${escHtml(kw || 'Global')}</div>
+        <div style="font-size:11px;color:var(--text2)">Scan #${s.scan_count} · ${s.new_total} nouvelles${s.last_error ? ' · ⚠️ '+escHtml(s.last_error) : ''}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── Feed ─────────────────────────────────────────────────────────────────────
+function addAdToFeed(ad, isNew) {
+  ads.unshift(ad);
+  if (ads.length > MAX_ADS) ads.pop();
+
+  const feedEl = document.getElementById('items-feed');
+  const dashEl = document.getElementById('dashboard-feed');
+
+  // Clear empty state
+  if (feedEl.querySelector('.empty')) feedEl.innerHTML = '';
+  if (dashEl.querySelector('.empty')) dashEl.innerHTML = '';
+
+  const card = buildAdCard(ad);
+
+  feedEl.insertAdjacentHTML('afterbegin', card);
+  if (feedEl.children.length > MAX_ADS) feedEl.lastElementChild.remove();
+
+  if (isNew) {
+    dashAds.unshift(ad);
+    if (dashAds.length > 10) dashAds.pop();
+    dashEl.insertAdjacentHTML('afterbegin', buildAdCard(ad));
+    if (dashEl.children.length > 10) dashEl.lastElementChild.remove();
+
+    // Badge notification if not on feed page
+    if (document.getElementById('page-feed').style.display !== 'block' ||
+        !document.getElementById('page-feed').classList.contains('active')) {
+      feedBadge++;
+      const badge = document.getElementById('feed-count-badge');
+      badge.textContent = feedBadge > 99 ? '99+' : feedBadge;
+      badge.style.display = 'inline';
+    }
+  }
+}
+
+function buildAdCard(ad) {
+  const img = ad.image
+    ? `<img class="item-img" src="${escHtml(ad.image)}" onerror="this.style.display='none'" loading="lazy">`
+    : `<div class="item-img-placeholder">👕</div>`;
+
+  const kw = ad.keyword ? `<span class="badge badge-purple">${escHtml(ad.keyword)}</span>` : '';
+  const mkt = ad.market_label ? `<span class="badge badge-gray">${escHtml(ad.market_label)}</span>` : '';
+  const size = ad.size ? `<span class="badge badge-gray">${escHtml(ad.size)}</span>` : '';
+  const brand = ad.brand ? `<span class="badge badge-gray">${escHtml(ad.brand)}</span>` : '';
+
+  return `<div class="item-card" data-market="${ad.market_key||''}">
+    ${img}
+    <div class="item-body">
+      <div class="item-title" title="${escHtml(ad.title||'')}">${escHtml(ad.title||'Sans titre')}</div>
+      <div class="item-meta">${ad.date||''} · ${escHtml(ad.seller||'')}</div>
+      <div class="item-actions">
+        <span class="item-price">${escHtml(ad.price||'')}</span>
+        ${kw}${mkt}${size}${brand}
+        <a href="${escHtml(ad.url||'#')}" target="_blank" class="btn btn-ghost btn-sm" style="margin-left:auto">🔗 Voir</a>
+        ${config._has_token && (config.autobuy||{}).enabled ? `<button class="btn btn-primary btn-sm" onclick="manualBuy('${escHtml(ad.id||'')}','${escHtml(ad.url||'')}')">⚡ Buy</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+function clearFeed() { ads = []; document.getElementById('items-feed').innerHTML = '<div class="empty"><div class="empty-icon">📦</div>Aucune annonce détectée</div>'; }
+
+function applyFilter() {
+  const market = document.getElementById('filter-market').value;
+  document.querySelectorAll('#items-feed .item-card').forEach(card => {
+    card.style.display = (!market || card.dataset.market === market) ? '' : 'none';
+  });
+}
+
+// ── Autobuy ───────────────────────────────────────────────────────────────────
+function handleAutobuyResult(result) {
+  abAttempts++;
+  if (result.success) abSuccess++;
+  document.getElementById('st-ab').textContent = abAttempts;
+  document.getElementById('st-ab-ok').textContent = abSuccess;
+
+  const el = document.getElementById('ab-activity');
+  if (el.querySelector('.empty')) el.innerHTML = '';
+
+  const cls = result.success ? 'success' : 'failed';
+  const icon = result.success ? '✅' : '❌';
+  const status = result.status || '';
+  const elapsed = result.elapsed_ms ? `${result.elapsed_ms}ms` : '';
+
+  el.insertAdjacentHTML('afterbegin', `
+    <div class="ab-card ${cls}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-weight:700">${icon} ${escHtml(result.title||'')}</span>
+        <span style="font-size:12px;color:var(--text2)">${elapsed}</span>
+      </div>
+      <div style="font-size:12px;color:var(--text2);margin-top:3px">
+        ${escHtml(result.price||'')} · ${escHtml(status)}
+        ${result.error ? ' · ' + escHtml(result.error) : ''}
+        ${result.url ? `· <a href="${escHtml(result.url)}" target="_blank">Voir</a>` : ''}
+      </div>
+    </div>
+  `);
+}
+
+async function saveToken() {
+  const token = document.getElementById('ab-token').value.trim();
+  if (!token) return;
+  try {
+    const r = await fetch('/api/token', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token})});
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('token-status').innerHTML = `<span style="color:var(--green)">✅ Token sauvegardé (${d.masked})</span>`;
+      document.getElementById('ab-token').value = '';
+      config._has_token = true;
+      appendLog('', '✅ Token Vinted sauvegardé');
+    }
+  } catch(e) {
+    document.getElementById('token-status').innerHTML = `<span style="color:var(--red)">❌ Erreur: ${e}</span>`;
+  }
+}
+
+function saveAutobuyConfig() {
+  const enabled = document.getElementById('ab-enabled').checked;
+  const maxPrice = parseFloat(document.getElementById('ab-max-price').value) || null;
+  if (!config.autobuy) config.autobuy = {};
+  config.autobuy.enabled = enabled;
+  config.autobuy.max_price = maxPrice;
+  patchConfig({autobuy: config.autobuy});
+}
+
+function loadAutobuyUI() {
+  const ab = config.autobuy || {};
+  document.getElementById('ab-enabled').checked = !!ab.enabled;
+  document.getElementById('ab-max-price').value = ab.max_price || '';
+  document.getElementById('token-status').innerHTML = config._has_token
+    ? '<span style="color:var(--green)">✅ Token configuré</span>'
+    : '<span style="color:var(--text2)">Aucun token</span>';
+}
+
+async function manualBuy(id, url) {
+  const m = url.match(/\/items\/(\d+)/);
+  if (!m) return;
+  appendLog('', `⚡ Autobuy manuel lancé pour ${url}`);
+  try {
+    const r = await fetch('/api/autobuy/test', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+    const d = await r.json();
+    appendLog('', `Disponible: ${d.can_buy} — ${d.title} (${d.price})`);
+  } catch(e) { appendLog('', `Erreur: ${e}`); }
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function updateStats(msg) {
+  const sc = msg.scanner || {};
+  const p = msg.perf || {};
+  const db = msg.db || {};
+  document.getElementById('st-scans').textContent = sc.total_scans ?? '—';
+  document.getElementById('st-new').textContent = sc.total_new_ads ?? '—';
+  document.getElementById('st-ms').textContent = p.total_ms ? Math.round(p.total_ms) : '—';
+  document.getElementById('st-db').textContent = db.total_listings ?? '—';
+  document.getElementById('perf-label').textContent = p.total_ms ? `⚡ ${Math.round(p.total_ms)}ms/scan` : '⚡ —';
+  updateTasksUI(sc.keywords || {});
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+function loadConfigUI() {
+  if (!config) return;
+  // Scanner
+  const iv = document.getElementById('s-interval');
+  if (iv) iv.value = config.interval_seconds ?? 8;
+  const minP = document.getElementById('s-min-price');
+  if (minP) minP.value = config.min_price ?? '';
+  const maxP = document.getElementById('s-max-price');
+  if (maxP) maxP.value = config.max_price ?? '';
+  const cu = document.getElementById('s-custom-url');
+  if (cu) cu.value = config.custom_url ?? '';
+
+  // Markets
+  const mkts = config.markets || {};
+  ['fr','pl','uk'].forEach(k => {
+    const el = document.getElementById(`mkt-${k}`);
+    if (!el) return;
+    const cb = el.querySelector('input');
+    if (cb) cb.checked = !!(mkts[k] && mkts[k].enabled);
+    el.className = 'market-btn' + (cb && cb.checked ? ' on' : '');
+  });
+
+  // Telegram
+  const tgEn = document.getElementById('s-tg-enabled');
+  if (tgEn) tgEn.checked = !!(config.telegram && config.telegram.enabled);
+  const dcEn = document.getElementById('s-dc-enabled');
+  if (dcEn) dcEn.checked = !!(config.discord && config.discord.enabled);
+
+  renderKeywords();
+  loadAutobuyUI();
+}
+
+function saveSettings() {
+  const patch = {
+    interval_seconds: parseInt(document.getElementById('s-interval').value) || 8,
+    min_price: parseFloat(document.getElementById('s-min-price').value) || null,
+    max_price: parseFloat(document.getElementById('s-max-price').value) || null,
+    custom_url: document.getElementById('s-custom-url').value.trim(),
+    markets: {
+      fr: {enabled: document.querySelector('#mkt-fr input').checked},
+      pl: {enabled: document.querySelector('#mkt-pl input').checked},
+      uk: {enabled: document.querySelector('#mkt-uk input').checked},
+    },
+    telegram: {enabled: document.getElementById('s-tg-enabled').checked},
+    discord: {enabled: document.getElementById('s-dc-enabled').checked},
+  };
+  const tgTok = document.getElementById('s-tg-token').value.trim();
+  const tgChat = document.getElementById('s-tg-chat').value.trim();
+  const dcWh = document.getElementById('s-dc-webhook').value.trim();
+  if (tgTok) patch.telegram_bot_token = tgTok;
+  if (tgChat) patch.telegram_chat_id = tgChat;
+  if (dcWh) patch.discord_webhook_url = dcWh;
+
+  ['fr','pl','uk'].forEach(k => {
+    const el = document.getElementById(`mkt-${k}`);
+    if (!el) return;
+    const cb = el.querySelector('input');
+    el.className = 'market-btn' + (cb && cb.checked ? ' on' : '');
+  });
+
+  patchConfig(patch);
+  appendLog('', '⚙️ Paramètres sauvegardés');
+}
+
+async function patchConfig(patch) {
+  try {
+    await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch)});
+  } catch(e) { appendLog('', `Erreur sauvegarde: ${e}`); }
+}
+
+// ── Logs ─────────────────────────────────────────────────────────────────────
+const MAX_LOG_LINES = 200;
+let logLines = 0;
+function appendLog(ts, msg) {
+  const el = document.getElementById('logs');
+  const isBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
+  const div = document.createElement('div');
+  div.innerHTML = ts ? `<span class="log-ts">[${ts}]</span>${escHtml(msg)}` : escHtml(msg);
+  el.appendChild(div);
+  logLines++;
+  if (logLines > MAX_LOG_LINES) { el.firstElementChild?.remove(); logLines--; }
+  if (isBottom) el.scrollTop = el.scrollHeight;
+}
+function clearLogs() { document.getElementById('logs').innerHTML = ''; logLines = 0; }
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  const page = document.getElementById(`page-${id}`);
+  if (page) page.classList.add('active');
+  const nav = document.getElementById(`nav-${id}`);
+  if (nav) nav.classList.add('active');
+  if (id === 'feed') { feedBadge = 0; document.getElementById('feed-count-badge').style.display = 'none'; }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function setWsBadge(txt) { document.getElementById('ws-badge').textContent = txt; }
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>
