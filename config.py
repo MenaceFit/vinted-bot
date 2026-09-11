@@ -150,7 +150,8 @@ def _migrate_legacy_secrets(cfg: dict, loaded: dict) -> None:
 
 
 def save_config(cfg: dict) -> None:
-    """Sauvegarde config.json — ne contient jamais webhook_url (legacy) ni secrets."""
-    clean = {k: v for k, v in cfg.items() if k != "webhook_url"}
+    """Sauvegarde config.json — ne contient jamais webhook_url (legacy), secrets, ni flags privés."""
+    _EXCLUDED = {"webhook_url", "_has_token", "_has_telegram", "_has_discord"}
+    clean = {k: v for k, v in cfg.items() if k not in _EXCLUDED}
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(clean, f, indent=2, ensure_ascii=False)

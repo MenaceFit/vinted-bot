@@ -258,6 +258,90 @@ async def test_dispatch_records_ad_even_when_telegram_fails(clean_db, monkeypatc
     assert rows[0]["telegram_status"] == "failed"
 
 
+async def test_sync_keywords_hot_adds_keyword(clean_db, monkeypatch):
+    """sync_keywords() doit démarrer une nouvelle tâche sans arrêter le scanner."""
+    import core.scanner as scanner_mod
+    monkeypatch.setattr(scanner_mod, "MIN_INTERVAL_SECONDS", 0.02)
+
+    stub = StubScraper()
+    scanner, cfg, logs, new_ads, _ = _make_scanner(stub, ["nike"], interval=0.03)
+    loop = asyncio.get_running_loop()
+
+    scanner.start(loop)
+    await asyncio.sleep(0.15)
+    assert set(scanner._tasks.keys()) == {"nike"}
+
+    # Ajoute "jordan" à chaud
+    cfg["keywords_filter"] = ["nike", "jordan"]
+    scanner.sync_keywords()
+    await asyncio.sleep(0.15)
+
+    assert "jordan" in scanner._tasks
+    assert "nike" in scanner._tasks
+    assert scanner.running
+
+    scanner.stop()
+    await asyncio.sleep(0.05)
+
+
+async def test_sync_keywords_hot_removes_keyword(clean_db, monkeypatch):
+    """sync_keywords() doit annuler la tâche d'un mot-clé retiré."""
+    import core.scanner as scanner_mod
+    monkeypatch.setattr(scanner_mod, "MIN_INTERVAL_SECONDS", 0.02)
+
+    stub = StubScraper()
+    scanner, cfg, logs, new_ads, _ = _make_scanner(stub, ["nike", "jordan"], interval=0.03)
+    loop = asyncio.get_running_loop()
+
+    scanner.start(loop)
+    await asyncio.sleep(0.15)
+    assert set(scanner._tasks.keys()) == {"nike", "jordan"}
+
+    # Retire "jordan" à chaud
+    cfg["keywords_filter"] = ["nike"]
+    scanner.sync_keywords()
+    await asyncio.sleep(0.15)
+
+    assert "jordan" not in scanner._tasks
+    assert "nike" in scanner._tasks
+
+    scanner.stop()
+    await asyncio.sleep(0.05)
+
+
+async def test_saturation_warning_logged(clean_db, monkeypatch):
+    """Quand toutes les annonces reçues sont nouvelles (saturation), un avertissement
+    est loggué car des annonces ont peut-être été manquées."""
+    import core.scanner as scanner_mod
+    from services.vinted import PER_PAGE_DEFAULT
+
+    monkeypatch.setattr(scanner_mod, "MIN_INTERVAL_SECONDS", 0.01)
+
+    call_count = [0]
+
+    async def saturated_scraper(active_keys, params, keywords=None, keyword_key="", per_page=10):
+        """Retourne exactement per_page items différents à chaque appel → saturation."""
+        call_count[0] += 1
+        n = call_count[0]
+        ads = [
+            {"id": f"item_{n}_{i}", "title": f"Saturated {i}", "price": "10€", "url": "", "image": "",
+             "keyword": keyword_key, "market_key": "fr", "created_ts": n * 100 + i}
+            for i in range(per_page)
+        ]
+        return ads, {"api_ms": 1.0, "parse_ms": 0.5, "retries": 0, "error": False}
+
+    scanner, cfg, logs, new_ads, _ = _make_scanner(saturated_scraper, ["test"], interval=0.02)
+    cfg["warmup_first_run"] = False  # skip warmup to reach saturation check faster
+
+    scanner.start(asyncio.get_running_loop())
+    await asyncio.sleep(0.2)
+    scanner.stop()
+    await asyncio.sleep(0.05)
+
+    warning_logs = [l for l in logs if "annonces reçues étaient nouvelles" in l]
+    assert len(warning_logs) >= 1
+
+
 def test_market_breakdown_hidden_for_single_market():
     """Un seul marché actif : le total déjà affiché suffit, pas besoin de détail."""
     scanner = Scanner(config_provider=lambda: {}, on_log=lambda m: None, on_new_ad=lambda ad: None)

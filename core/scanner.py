@@ -349,6 +349,27 @@ class Scanner:
             except Exception as e:
                 logger.debug(f"[scanner] telegram_retry_loop error: {e}")
 
+    # ── Planification thread-safe ─────────────────────────────────────────────
+
+    def _schedule_coro(self, coro, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+        """Planifie une coroutine dans la loop cible depuis n'importe quel contexte.
+
+        - Depuis la loop elle-même (FastAPI, callbacks asyncio) → create_task
+        - Depuis un thread étranger (ancienne GUI Tkinter, tests) → run_coroutine_threadsafe
+        """
+        target = loop or self._loop
+        if not target or target.is_closed():
+            coro.close()
+            return
+        try:
+            running = asyncio.get_running_loop()
+            if running is target:
+                target.create_task(coro)
+                return
+        except RuntimeError:
+            pass
+        asyncio.run_coroutine_threadsafe(coro, target)
+
     # ── API publique ──────────────────────────────────────────────────────────
 
     @property
@@ -356,9 +377,9 @@ class Scanner:
         return self._running
 
     def run_once(self) -> None:
-        """Scan manuel unique (appelé depuis le thread Tkinter)."""
+        """Scan manuel unique. Fonctionne depuis la loop asyncio ou un thread étranger."""
         if self._loop and not self._loop.is_closed():
-            asyncio.run_coroutine_threadsafe(self._run_once_async(), self._loop)
+            self._schedule_coro(self._run_once_async())
         else:
             logger.warning("Loop asyncio non disponible pour run_once")
 
@@ -426,7 +447,7 @@ class Scanner:
 
         # Toute la création de Task se fait à l'intérieur de la loop asyncio,
         # en une seule fois — c'est le fix du bug de double-scan (voir docstring).
-        asyncio.run_coroutine_threadsafe(self._start_tasks(kws_to_watch, active_keys, params, interval), loop)
+        self._schedule_coro(self._start_tasks(kws_to_watch, active_keys, params, interval), loop)
 
         labels = ", ".join(active_keys)
         kw_info = f" — mots-clés: {', '.join(kws_to_watch)}" if any(kws_to_watch) else ""
@@ -451,7 +472,7 @@ class Scanner:
         active_keys = self._get_active_keys(cfg)
         params = self._build_base_params(cfg)
         interval = max(MIN_INTERVAL_SECONDS, float(cfg.get("interval_seconds", 10)))
-        asyncio.run_coroutine_threadsafe(self._sync_tasks(desired, active_keys, params, interval), self._loop)
+        self._schedule_coro(self._sync_tasks(desired, active_keys, params, interval))
 
     async def _sync_tasks(self, desired: set[str], active_keys: list[str], params: dict, interval: float) -> None:
         for kw in list(self._tasks.keys()):

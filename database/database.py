@@ -150,8 +150,9 @@ def mark_all_seen(ads: list[dict]) -> None:
 
 def reset_all() -> None:
     """Efface mémoire + SQLite (dédup ET historique)."""
-    global _cache
+    global _cache, _listing_count
     _cache = {}
+    _listing_count = 0
 
     async def _do_reset():
         await _db_conn.execute("DELETE FROM seen_ads")

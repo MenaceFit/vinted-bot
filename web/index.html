@@ -324,7 +324,14 @@ input:checked + .slider:before { transform: translateX(16px); }
             <div class="form-hint">Obtiens ton token depuis les cookies Vinted (access_token_web). Il reste local, jamais envoyé ailleurs.</div>
           </div>
           <div style="height:8px"></div>
-          <button class="btn btn-ghost btn-sm" onclick="showPage('test-ab-modal')">🧪 Tester un article</button>
+          <div class="form-row">
+            <label>Tester un article</label>
+            <div class="form-row-inline">
+              <div class="form-row"><input type="text" id="ab-test-url" placeholder="https://www.vinted.fr/items/..."></div>
+              <button class="btn btn-ghost btn-sm" onclick="testArticle()">🧪 Vérifier</button>
+            </div>
+            <div id="ab-test-result" style="margin-top:6px;font-size:12px"></div>
+          </div>
         </div>
 
         <div class="card ab-section">
@@ -828,6 +835,24 @@ function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function setWsBadge(txt) { document.getElementById('ws-badge').textContent = txt; }
+
+async function testArticle() {
+  const url = document.getElementById('ab-test-url').value.trim();
+  const out = document.getElementById('ab-test-result');
+  if (!url) { out.innerHTML = '<span style="color:var(--orange)">⚠️ Entre une URL d\'article Vinted</span>'; return; }
+  out.innerHTML = '<span style="color:var(--text2)">⏳ Vérification…</span>';
+  try {
+    const r = await fetch('/api/autobuy/check', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+    const d = await r.json();
+    if (d.error === 'token_invalid') {
+      out.innerHTML = '<span style="color:var(--red)">❌ Token invalide ou expiré</span>';
+    } else if (d.can_buy) {
+      out.innerHTML = `<span style="color:var(--green)">✅ Disponible — ${escHtml(d.title)} · ${escHtml(d.price)}</span>`;
+    } else {
+      out.innerHTML = `<span style="color:var(--orange)">⚠️ Non disponible à l'achat${d.error ? ' · ' + escHtml(d.error) : ''}</span>`;
+    }
+  } catch(e) { out.innerHTML = `<span style="color:var(--red)">❌ Erreur: ${e}</span>`; }
+}
 
 // ── Delegated event listeners ─────────────────────────────────────────────────
 document.getElementById('kw-list').addEventListener('click', e => {

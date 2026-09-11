@@ -237,6 +237,9 @@ async def get_config() -> JSONResponse:
 
 @app.post("/api/config")
 async def update_config(body: dict) -> JSONResponse:
+    # Strip computed/private flags — they must never be persisted to config.json
+    for _k in ("_has_token", "_has_telegram", "_has_discord"):
+        body.pop(_k, None)
     tg_token = body.pop("telegram_bot_token", None)
     tg_chat = body.pop("telegram_chat_id", None)
     dc_webhook = body.pop("discord_webhook_url", None)
