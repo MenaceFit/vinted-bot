@@ -133,8 +133,11 @@ nav { flex: 1; padding: 10px 8px; }
 .item-card {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); display: flex; gap: 14px; padding: 12px;
-  animation: slideIn 0.25s ease;
+  animation: slideIn 0.25s ease; transition: border-color 0.3s;
 }
+.item-card.bought  { border-color: var(--green); }
+.item-card.buy-err { border-color: var(--red); }
+.btn-buy:disabled { opacity: 0.6; cursor: not-allowed; transform: none !important; }
 @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
 .item-img {
   width: 72px; height: 72px; object-fit: cover;
@@ -682,6 +685,12 @@ function buildAdCard(ad) {
   const brand = ad.brand ? `<span class="badge badge-gray">${escHtml(ad.brand)}</span>` : '';
 
   if (ad.keyword) _addKwToFilter(ad.keyword);
+  const buyBtn = config._has_token
+    ? `<button class="btn btn-primary btn-sm btn-buy"
+         data-url="${escHtml(ad.url||'')}"
+         data-price="${ad.price_num||''}"
+         data-title="${escHtml(ad.title||'')}">⚡ Acheter</button>`
+    : '';
   return `<div class="item-card" data-market="${ad.market_key||''}" data-keyword="${escHtml(ad.keyword||'')}">
     ${img}
     <div class="item-body">
@@ -691,7 +700,7 @@ function buildAdCard(ad) {
         <span class="item-price">${escHtml(ad.price||'')}</span>
         ${kw}${mkt}${size}${brand}
         <a href="${escHtml(ad.url||'#')}" target="_blank" class="btn btn-ghost btn-sm" style="margin-left:auto">🔗 Voir</a>
-        ${config._has_token && (config.autobuy||{}).enabled ? `<button class="btn btn-primary btn-sm btn-buy" data-url="${escHtml(ad.url||'')}">⚡ Buy</button>` : ''}
+        ${buyBtn}
       </div>
     </div>
   </div>`;
@@ -788,15 +797,49 @@ function loadAutobuyUI() {
     : '<span style="color:var(--text2)">Aucun token</span>';
 }
 
-async function manualBuy(url) {
+async function manualBuy(url, btn) {
   if (!url) return;
-  appendLog('', `⚡ Achat manuel lancé…`);
+  const card = btn ? btn.closest('.item-card') : null;
+
+  // État chargement
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Achat…'; }
+
+  appendLog('', `⚡ Achat manuel → ${url.split('/').pop()}`);
   try {
-    const r = await fetch('/api/autobuy/buy', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+    const body = { url };
+    if (btn && btn.dataset.price) body.price_num = parseFloat(btn.dataset.price);
+    if (btn && btn.dataset.title) body.title = btn.dataset.title;
+
+    const r = await fetch('/api/autobuy/buy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
     const d = await r.json();
     handleAutobuyResult(d);
-    appendLog('', `${d.success ? '✅' : '❌'} ${escHtml(d.title||'')} — ${d.status}`);
-  } catch(e) { appendLog('', `Erreur achat: ${e}`); }
+    appendLog('', `${d.success ? '✅' : '❌'} ${escHtml(d.title||btn?.dataset.title||'')} — ${d.status}`);
+
+    if (d.success) {
+      if (btn)  { btn.textContent = '✅ Acheté !'; btn.style.background = 'var(--green)'; }
+      if (card) { card.classList.add('bought'); }
+    } else {
+      const label = d.status === 'already_sold' ? '❌ Déjà vendu'
+                  : d.status === 'token_invalid' ? '❌ Token invalide'
+                  : d.status === 'price_exceeded' ? '❌ Prix dépassé'
+                  : d.status === 'timeout'       ? '❌ Timeout'
+                  : `❌ ${d.status||'Erreur'}`;
+      if (btn)  { btn.textContent = label; btn.style.background = 'var(--red)'; }
+      if (card) { card.classList.add('buy-err'); }
+      // Réinitialisation après 3s
+      setTimeout(() => {
+        if (btn) { btn.textContent = '⚡ Acheter'; btn.style.background = ''; btn.disabled = false; }
+        if (card) { card.classList.remove('buy-err'); }
+      }, 3000);
+    }
+  } catch(e) {
+    appendLog('', `Erreur achat: ${e}`);
+    if (btn) { btn.textContent = '⚡ Acheter'; btn.style.background = ''; btn.disabled = false; }
+  }
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -994,7 +1037,7 @@ document.getElementById('kw-list').addEventListener('click', e => {
 // Buy buttons appear in both feed and dashboard-feed
 document.addEventListener('click', e => {
   const btn = e.target.closest('.btn-buy');
-  if (btn) manualBuy(btn.dataset.url);
+  if (btn && !btn.disabled) manualBuy(btn.dataset.url, btn);
 });
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────

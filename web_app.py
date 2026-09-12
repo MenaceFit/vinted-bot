@@ -363,10 +363,19 @@ async def autobuy_buy(body: dict) -> JSONResponse:
     if not m:
         raise HTTPException(400, "URL Vinted invalide")
 
-    import re as _re
     market_key = "pl" if "vinted.pl" in item_url else "uk" if "vinted.co.uk" in item_url else "fr"
-    ad = {"raw_id": m.group(1), "market_key": market_key, "price_num": None, "title": "", "price": "", "url": item_url}
-
+    price_num = body.get("price_num")
+    title = body.get("title", "")
+    if price_num is not None:
+        try:
+            price_num = float(price_num)
+        except (ValueError, TypeError):
+            price_num = None
+    ad = {
+        "raw_id": m.group(1), "market_key": market_key,
+        "price_num": price_num, "title": title, "price": "", "url": item_url,
+    }
+    # max_price from global config — but manual buy always ignores it
     result = await run_autobuy(ad=ad, token=token, max_price=None, markets_info=config_data.get("markets", {}))
     await manager.broadcast({"type": "autobuy_result", "result": result})
     return JSONResponse(result)
